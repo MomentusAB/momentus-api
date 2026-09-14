@@ -1,0 +1,15 @@
+{
+  "name": "Momentus",
+  "short_name": "Momentus",
+  "description": "Momentus System – lager",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#EEF0F2",
+  "theme_color": "#16202A",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
