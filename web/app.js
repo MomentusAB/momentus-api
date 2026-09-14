@@ -147,7 +147,6 @@ const App = {
     if (parts[0] === 'inventory') InventoryScreen.render();
     else if (parts[0] === 'item') ItemScreen.render(Number(parts[1]));
     else if (parts[0] === 'scan') ScanScreen.render();
-    else if (parts[0] === 'artno') ArticleScreen.render();
     else if (parts[0] === 'more' && parts[1] === 'transactions') TransactionsScreen.render();
     else if (parts[0] === 'more' && parts[1] === 'duplicates') DuplicatesScreen.render();
     else if (parts[0] === 'more' && parts[1] === 'export') ExportScreen.render();
@@ -169,7 +168,7 @@ function topbar(title, { back, actions = '' } = {}) {
 }
 
 function tabbar(active) {
-  const tabs = [['inventory', 'tab.inventory', ICONS.box], ['scan', 'tab.scan', ICONS.scan], ['artno', 'tab.articleNumbers', ICONS.hash], ['more', 'tab.more', ICONS.more]];
+  const tabs = [['inventory', 'tab.inventory', ICONS.box], ['scan', 'tab.scan', ICONS.scan], ['more', 'tab.more', ICONS.more]];
   return `<nav class="tabbar">${tabs.map(([id, key, icon]) =>
     `<button class="${active === id ? 'active' : ''}" data-nav="#/${id}">${icon}<span>${esc(t(key))}</span></button>`).join('')}</nav>`;
 }
@@ -580,8 +579,6 @@ const Editor = {
         <div class="section-title">${esc(t('editor.section.articleNumber'))}</div>
         <div class="card">
           <div class="field"><label>${esc(t('field.articleNumber'))}</label><input id="e-artno" class="mono" value="${esc(v.article_number || '')}" autocapitalize="characters" autocorrect="off"></div>
-          <label class="field check"><span>${esc(t('editor.multifit'))}</span><input type="checkbox" id="e-multi"></label>
-          <div class="field"><button type="button" class="btn" id="e-gen">${esc(t('editor.generate'))}</button></div>
         </div>
         <div id="e-info" class="status err" hidden></div>
         <button class="btn primary big" id="e-save">${esc(t('save'))}</button>
@@ -605,19 +602,6 @@ const Editor = {
 
     const selectedBrands = () => $$('#e-brands .chip.active', bg).map((c) => c.dataset.b);
     const info = (msg) => { const el = q('#e-info'); el.textContent = msg || ''; el.hidden = !msg; };
-
-    q('#e-gen').onclick = async () => {
-      info('');
-      const k = q('#e-cat').value;
-      if (!k) return info(I18N.lang === 'sv' ? 'Välj huvudkategori innan du genererar ett artikelnummer.' : 'Select a main category before generating an article number.');
-      if (!q('#e-sub').value) return info(I18N.lang === 'sv' ? 'Välj underkategori innan du genererar ett artikelnummer.' : 'Select a subcategory before generating an article number.');
-      const existing = q('#e-artno').value.trim();
-      if (existing && !await confirmDialog(t('artno.replace.title'), t('editor.generate.replace', existing), t('artno.replace'))) return;
-      try {
-        const r = await API.post('/article-numbers/generate', { k, uu: q('#e-sub').value, vehicle_brands: selectedBrands(), multifit: q('#e-multi').checked });
-        q('#e-artno').value = r.article_number;
-      } catch (e) { info(e.message); }
-    };
 
     q('#e-save').onclick = async () => {
       info('');
@@ -720,19 +704,13 @@ const ScanScreen = {
   busy: false,
 
   render() {
-    const s = App.scan;
     render(`<div class="screen">
       ${topbar(t('scan.title'))}
       <div class="content">
         <div class="scanner"><video playsinline muted></video><div class="frame"></div><div class="flash" id="sc-flash"></div>
           <div class="overlay" id="sc-msg">${esc(t('scan.starting'))}</div>
           <div class="toggle"><button id="sc-toggle">${esc(t('scan.stop'))}</button></div></div>
-        <div class="segmented" id="sc-mode">
-          ${['lookup', 'in', 'out'].map((mo) => `<button class="${s.mode === mo ? 'active' : ''}" data-m="${mo}">${esc(t('scan.mode.' + mo))}</button>`).join('')}
-        </div>
         <div class="card">
-          <div class="row" id="sc-qty-row" ${s.mode === 'lookup' ? 'hidden' : ''}><span class="label">${esc(t('scan.qty'))}</span>
-            <div class="stepper"><button id="sq-minus">−</button><input id="sq-val" type="number" inputmode="numeric" min="1" value="${s.qty}"><button id="sq-plus">+</button></div></div>
           <div class="row"><input id="sc-manual" style="flex:1;border:0;font-size:16px;min-height:36px;outline:none" placeholder="${esc(t('scan.manual'))}" autocapitalize="characters" autocorrect="off"><button class="btn primary" style="width:auto;min-height:40px" id="sc-go">${esc(t('scan.go'))}</button></div>
         </div>
         <div class="section-title">${esc(t('scan.last'))}</div>
@@ -741,12 +719,6 @@ const ScanScreen = {
       ${tabbar('scan')}
     </div>`);
 
-    $$('#sc-mode button').forEach((b) => b.onclick = () => { App.scan.mode = b.dataset.m; $$('#sc-mode button').forEach((x) => x.classList.toggle('active', x === b)); $('#sc-qty-row').hidden = b.dataset.m === 'lookup'; });
-    const qv = $('#sq-val');
-    const setQty = (n) => { App.scan.qty = Math.max(1, Math.min(9999, n || 1)); qv.value = App.scan.qty; };
-    $('#sq-minus').onclick = () => setQty(App.scan.qty - 1);
-    $('#sq-plus').onclick = () => setQty(App.scan.qty + 1);
-    qv.onchange = () => setQty(parseInt(qv.value, 10));
     $('#sc-go').onclick = () => { const v = $('#sc-manual').value.trim(); if (v) { $('#sc-manual').value = ''; this.handle(v); } };
     $('#sc-manual').onkeydown = (e) => { if (e.key === 'Enter') $('#sc-go').click(); };
     $('#sc-toggle').onclick = () => { if (Scanner.active) { Scanner.stop(); $('#sc-toggle').textContent = t('scan.start'); $('#sc-msg').hidden = false; $('#sc-msg').textContent = t('scan.stop'); } else this.startCamera(); };
@@ -766,14 +738,12 @@ const ScanScreen = {
     const s = App.scan;
     let html = `<div class="row"><span class="label ${s.statusCls || ''}" style="font-size:15px">${esc(s.status || t('scan.ready'))}</span></div>`;
     if (s.lastItem) html += itemRowHtml(s.lastItem);
-    if (s.lastTx) html += `<div class="row"><button class="btn danger" id="sc-undo">${ICONS.undo}${esc(t('item.undoLast'))}</button></div>`;
     return html;
   },
 
   drawResult() {
     const el = $('#sc-result'); if (!el) return;
     el.innerHTML = this.resultHtml();
-    const u = $('#sc-undo'); if (u) u.onclick = () => this.undo();
   },
 
   flash(ok) {
@@ -787,121 +757,15 @@ const ScanScreen = {
     this.busy = true;
     const s = App.scan;
     try {
-      const r = await API.post('/scan', { barcode: code, mode: s.mode, qty: s.qty });
-      s.lastItem = r.item; s.lastTx = r.transaction; s.status = r.message; s.statusCls = 'ok';
+      const r = await API.post('/scan', { barcode: code, mode: 'lookup', qty: 1 });
+      s.lastItem = r.item; s.status = r.message; s.statusCls = 'ok';
       haptic(true); this.flash(true);
     } catch (e) {
-      s.lastItem = null; s.lastTx = null; s.status = e.message; s.statusCls = 'err';
+      s.lastItem = null; s.status = e.message; s.statusCls = 'err';
       haptic(false); this.flash(false);
     }
     this.busy = false;
     this.drawResult();
-  },
-
-  async undo() {
-    const s = App.scan;
-    try {
-      const r = await API.post(`/transactions/${s.lastTx.id}/undo`);
-      s.lastItem = r.item; s.lastTx = null; s.status = r.message; s.statusCls = 'ok'; haptic(true);
-    } catch (e) { s.status = e.message; s.statusCls = 'err'; haptic(false); }
-    this.drawResult();
-  },
-};
-
-// ---------------------------------------------------------------- article numbers
-
-const ArticleScreen = {
-  state: { k: '', uu: '', code: 'VO', multifit: false, org: '' },
-  numbers: [], search: '', timer: null,
-
-  render() {
-    const m = App.meta || { main_categories: {}, vehicle_brand_codes: {}, vehicle_brands: [], sub_categories: [] };
-    const st = this.state;
-    const cats = Object.keys(m.main_categories).sort();
-    const codes = m.vehicle_brands.filter((b) => m.vehicle_brand_codes[b]).map((b) => [m.vehicle_brand_codes[b], b]);
-    render(`<div class="screen">
-      ${topbar(t('artno.title'))}
-      <div class="content">
-        <div class="section-title">${esc(t('artno.section.generate'))}</div>
-        <div class="card">
-          <div class="field"><label>${esc(t('field.mainCategory'))}</label>
-            <select id="a-cat"><option value="">${esc(t('none'))}</option>${cats.map((k) => `<option value="${k}" ${st.k === k ? 'selected' : ''}>${esc(m.main_categories[k])}</option>`).join('')}</select></div>
-          <div class="field"><label>${esc(t('field.subCategory'))}</label><select id="a-sub"></select></div>
-          <label class="field check"><span>${esc(t('editor.multifit'))}</span><input type="checkbox" id="a-multi" ${st.multifit ? 'checked' : ''}></label>
-          <div class="field" id="a-brand-row" ${st.multifit ? 'hidden' : ''}><label>${esc(t('artno.brand'))}</label>
-            <select id="a-brand">${codes.map(([c, b]) => `<option value="${c}" ${st.code === c ? 'selected' : ''}>${esc(b[0] + b.slice(1).toLowerCase())} (${c})</option>`).join('')}</select></div>
-          <div class="field"><label>${esc(t('artno.orgArticleNo'))}</label><input id="a-org" class="mono" value="${esc(st.org)}" autocorrect="off" autocapitalize="none"></div>
-          <div class="field"><button class="btn primary" id="a-gen">${esc(t('artno.generate'))}</button></div>
-          <div id="a-info" class="status" hidden></div>
-        </div>
-        <div class="section-title">${esc(t('artno.section.latest'))}</div>
-        <div class="search"><input id="a-search" type="search" placeholder="${esc(t('artno.searchPrompt'))}" value="${esc(this.search)}"></div>
-        <div class="card" id="a-list"><div class="row muted">${esc(t('loading'))}</div></div>
-      </div>
-      ${tabbar('artno')}
-    </div>`);
-
-    const fillSubs = () => {
-      const subs = st.k ? m.sub_categories.filter((s) => s.k === st.k) : [];
-      if (!subs.some((s) => s.uu === st.uu)) st.uu = subs[0] ? subs[0].uu : '';
-      $('#a-sub').innerHTML = subs.map((s) => `<option value="${s.uu}" ${st.uu === s.uu ? 'selected' : ''}>${esc(s.uu + ' - ' + s.name)}</option>`).join('') || `<option value="">${esc(t('editor.noSubcategories'))}</option>`;
-      $('#a-sub').disabled = !subs.length;
-    };
-    fillSubs();
-    $('#a-cat').onchange = (e) => { st.k = e.target.value; fillSubs(); };
-    $('#a-sub').onchange = (e) => { st.uu = e.target.value; };
-    $('#a-multi').onchange = (e) => { st.multifit = e.target.checked; $('#a-brand-row').hidden = st.multifit; };
-    $('#a-brand').onchange = (e) => { st.code = e.target.value; };
-    $('#a-org').oninput = (e) => { st.org = e.target.value; };
-    $('#a-gen').onclick = () => this.generate(false);
-    $('#a-search').oninput = (e) => { this.search = e.target.value; clearTimeout(this.timer); this.timer = setTimeout(() => this.load(), 300); };
-    this.load();
-  },
-
-  async load() {
-    try {
-      this.numbers = await API.get('/article-numbers', { search: this.search, limit: 200 });
-      const el = $('#a-list'); if (!el) return;
-      el.innerHTML = this.numbers.length ? this.numbers.map((n) => `
-        <div class="row" data-n="${esc(n.article_number)}"><span class="label mono" style="font-family:var(--mono)">${esc(n.article_number)}</span><span class="small muted">${esc(shortDate(n.created_at))}</span></div>`).join('')
-        : `<div class="row muted">–</div>`;
-      $$('#a-list .row[data-n]').forEach((row) => {
-        let timer;
-        const ask = () => this.deleteNumber(row.dataset.n);
-        row.addEventListener('touchstart', () => { timer = setTimeout(ask, 700); }, { passive: true });
-        row.addEventListener('touchend', () => clearTimeout(timer));
-        row.addEventListener('touchmove', () => clearTimeout(timer));
-        row.addEventListener('contextmenu', (e) => { e.preventDefault(); ask(); });
-        row.onclick = () => { navigator.clipboard?.writeText(row.dataset.n); toast(t('artno.copied')); };
-      });
-    } catch (e) { toast(e.message, true); }
-  },
-
-  async generate(overwrite) {
-    const st = this.state;
-    const info = (msg, ok) => { const el = $('#a-info'); el.textContent = msg; el.className = 'status ' + (ok ? 'ok' : 'err'); el.hidden = !msg; };
-    if (!st.k || !st.uu) return info(I18N.lang === 'sv' ? 'Välj huvudkategori och underkategori.' : 'Select main category and subcategory.', false);
-    const org = st.org.trim();
-    if (!org) return info(t('artno.orgRequired'), false);
-    const m = App.meta;
-    const brandName = Object.keys(m.vehicle_brand_codes).find((b) => m.vehicle_brand_codes[b] === st.code) || '';
-    try {
-      const r = await API.post('/article-numbers/generate', { k: st.k, uu: st.uu, vehicle_brands: st.multifit ? [] : [brandName], multifit: st.multifit, org_article_no: org, overwrite });
-      navigator.clipboard?.writeText(r.article_number);
-      info(t('artno.created', r.article_number) + ' (' + t('artno.copied') + ')', true);
-      st.org = ''; $('#a-org').value = '';
-      this.load();
-    } catch (e) {
-      if (e.status === 409 && /redan artikelnummer/.test(e.message)) {
-        const existing = (e.message.split('artikelnummer: ')[1] || '').split('.')[0];
-        if (await confirmDialog(t('artno.replace.title'), t('artno.replace.message', existing), t('artno.replace'))) this.generate(true);
-      } else info(e.message, false);
-    }
-  },
-
-  async deleteNumber(n) {
-    if (!await confirmDialog(t('delete'), t('artno.delete.confirm', n), t('delete'))) return;
-    try { await API.del('/article-numbers/' + encodeURIComponent(n)); this.load(); } catch (e) { toast(e.message, true); }
   },
 };
 

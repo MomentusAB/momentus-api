@@ -53,7 +53,7 @@ a { color: inherit; }
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
   height: calc(var(--tab-h) + var(--safe-bottom)); padding-bottom: var(--safe-bottom);
   background: var(--surface); border-top: 1px solid var(--line);
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(3, 1fr);
 }
 .tabbar button { background: none; border: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--ink-3); font-size: 11px; font-weight: 600; }
 .tabbar button svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
