@@ -160,7 +160,7 @@ class GenerateArticleNumberResponse(BaseModel):
 
 class UsedNumberOut(BaseModel):
     article_number: str
-    created_at: datetime
+    created_at: str      # used_numbers.created_at kan vara TEXT i äldre databaser
 
 
 # ---------------------------------------------------------------- dubbletter

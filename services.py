@@ -762,7 +762,7 @@ def latest_used_numbers(conn, search: str = None, limit: int = 200,
         cur.execute(
             f"""
             SELECT article_number,
-                   created_at AT TIME ZONE current_setting('TimeZone') AS created_at
+                   CAST(created_at AS TEXT) AS created_at
             FROM used_numbers
             {where_sql}
             ORDER BY {order_col} {order_dir}
