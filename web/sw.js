@@ -1,6 +1,6 @@
 // Minimal service worker: caches the app shell so the icon opens instantly.
 // API calls are never cached - the inventory must always be live.
-const CACHE = 'momentus-shell-v1';
+const CACHE = 'momentus-shell-v3';
 const SHELL = ['./', './index.html', './app.css', './app.js', './i18n.js', './manifest.webmanifest',
                './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 

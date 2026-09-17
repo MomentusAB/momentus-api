@@ -3,6 +3,8 @@
 
 'use strict';
 
+const APP_VERSION = '2026-09-17c';   // visas på inloggningssidan och under Mer
+
 // ---------------------------------------------------------------- helpers
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -188,9 +190,10 @@ function openModal(html) {
   bg.innerHTML = `<div class="modal">${html}</div>`;
   bg.addEventListener('click', (e) => { if (e.target === bg) closeModal(); });
   document.body.appendChild(bg);
+  document.body.classList.add('modal-open');
   return bg;
 }
-function closeModal() { $$('.modal-bg').forEach((m) => m.remove()); }
+function closeModal() { $$('.modal-bg').forEach((m) => m.remove()); document.body.classList.remove('modal-open'); }
 
 function confirmDialog(title, message, okLabel, danger = true) {
   return new Promise((resolve) => {
@@ -241,6 +244,7 @@ function LoginScreen() {
       <button type="button" data-lang="en" class="${I18N.lang === 'en' ? 'active' : ''}">English</button>
     </div></div>
     ${installHint()}
+    <div class="muted small" style="text-align:center">v${APP_VERSION}</div>
   </form></div>`;
 }
 
@@ -790,7 +794,7 @@ const MoreScreen = {
           <div class="row"><span class="label muted">${esc(t('more.server'))}</span><span class="value small">${esc(location.host)}</span></div>
           <button class="row-btn" id="mo-logout" style="color:var(--danger)"><span class="label">${esc(t('logout'))}</span></button>
         </div>
-        <div class="muted small" style="text-align:center;padding:8px">${esc(t('more.about'))}</div>
+        <div class="muted small" style="text-align:center;padding:8px">${esc(t('more.about'))} · v${APP_VERSION}</div>
         ${installHint()}
       </div>
       ${tabbar('more')}
