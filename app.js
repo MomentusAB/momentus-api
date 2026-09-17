@@ -185,12 +185,14 @@ function openModal(html) {
   closeModal();
   const bg = document.createElement('div');
   bg.className = 'modal-bg';
-  bg.innerHTML = `<div class="modal">${html}</div>`;
+  const small = !html.includes('class="content"') || html.includes('id="cf-ok"');
+  bg.innerHTML = `<div class="modal${small ? ' modal-small' : ''}">${html}</div>`;
   bg.addEventListener('click', (e) => { if (e.target === bg) closeModal(); });
   document.body.appendChild(bg);
+  document.body.classList.add('modal-open');
   return bg;
 }
-function closeModal() { $$('.modal-bg').forEach((m) => m.remove()); }
+function closeModal() { $$('.modal-bg').forEach((m) => m.remove()); document.body.classList.remove('modal-open'); }
 
 function confirmDialog(title, message, okLabel, danger = true) {
   return new Promise((resolve) => {
