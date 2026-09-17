@@ -314,5 +314,19 @@ app.include_router(api)
 # Mobilappen (PWA) serveras från mappen web/ på samma adress som API:t.
 # Registreras sist så att /api/... och /docs matchas först.
 _web_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+
+
+@app.middleware("http")
+async def no_cache_for_app_files(request: Request, call_next):
+    """Appens egna filer ska alltid hämtas färska så att uppdateringar syns direkt.
+    Ikoner får cachas."""
+    response = await call_next(request)
+    path = request.url.path
+    if not path.startswith("/api/") and not path.startswith("/icons/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+
 if os.path.isdir(_web_dir):
     app.mount("/", StaticFiles(directory=_web_dir, html=True), name="web")
