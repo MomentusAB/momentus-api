@@ -40,6 +40,23 @@ class AppError(Exception):
         self.message = message
 
 
+# ---------------------------------------------------------------- lager (warehouse)
+
+# Appen skickar alltid med vilket lager den jobbar i ("lager" = nya,
+# "legacy" = gamla). Anrop utan lager går mot det gamla, precis som innan
+# det nya lagret fanns.
+DEFAULT_WAREHOUSE = "legacy"
+
+
+def _tables(warehouse):
+    """(artikeltabell, historiktabell, transaktionstabell, inställningar) för
+    ett lager. Namnen kommer från db.WAREHOUSES, aldrig från anropet."""
+    cfg = db.WAREHOUSES.get(warehouse or DEFAULT_WAREHOUSE)
+    if not cfg:
+        raise AppError("Okänt lager.")
+    return cfg["items"], cfg["history"], cfg["transactions"], cfg
+
+
 # ---------------------------------------------------------------- meta
 
 def get_meta(conn):
@@ -54,6 +71,16 @@ def get_meta(conn):
         "sub_categories": subs,
         "column_definitions": [list(c) for c in COLUMN_BY_KEY.values()],
         "field_labels": FIELD_LABELS,
+        "warehouses": [
+            {
+                "key": key,
+                "name": cfg["menu"],
+                "number_by": cfg.get("number_by", "brand"),
+                "number_prefix": cfg.get("number_prefix", ""),
+            }
+            for key, cfg in db.WAREHOUSES.items()
+        ],
+        "suppliers": [{"code": code, "name": name} for code, name in db.ARTICLE_NUMBER_SUPPLIERS],
     }
 
 
@@ -65,7 +92,7 @@ def load_subcategory_map(conn):
 
 # ---------------------------------------------------------------- gruppering (som listan i Lager)
 
-def parse_article_number(article_number):
+def parse_article_number(article_number, prefix=""):
     if not article_number:
         return None, None
     parts = article_number.split("-")
@@ -73,15 +100,19 @@ def parse_article_number(article_number):
         return None, None
     k = parts[0].strip()
     uu = parts[1].strip()
+    # Nya lagret: M5-02-SMP-000001 - bokstaven framför huvudkategorin hör
+    # inte till kategorin.
+    if prefix and k.upper().startswith(prefix.upper()):
+        k = k[len(prefix):]
     if not k.isdigit() or not uu.isdigit():
         return None, None
     return k, uu
 
 
-def group_labels_for_row(row, subcat_map):
+def group_labels_for_row(row, subcat_map, prefix=""):
     """(huvudrubrik, underrubrik, underkategorinamn) - samma som ui_lager."""
     article_number = (row.get("article_number") or "").strip()
-    k, uu = parse_article_number(article_number)
+    k, uu = parse_article_number(article_number, prefix)
 
     if k is not None and uu is not None:
         main_label = MAIN_CATEGORIES.get(k, f"{k}. OKÄND HUVUDKATEGORI")
@@ -94,11 +125,11 @@ def group_labels_for_row(row, subcat_map):
     return "Okategoriserade", fallback_main if fallback_main else "Ingen huvudkategori", ""
 
 
-def _decorate(row, subcat_map):
+def _decorate(row, subcat_map, cfg):
     item = dict(row)
     if item.get("unit_cost") is not None:
         item["unit_cost"] = float(item["unit_cost"])
-    main_label, sub_label, sub_name = group_labels_for_row(item, subcat_map)
+    main_label, sub_label, sub_name = group_labels_for_row(item, subcat_map, cfg.get("number_prefix", ""))
     item["main_label"] = main_label
     item["sub_label"] = sub_label
     item["subcategory"] = sub_name
@@ -144,13 +175,15 @@ SORTABLE = set(ALL_COLUMN_KEYS) | {"product_name", "main_label", "sub_label", "u
 
 
 def list_items(conn, search=None, main_category=None, vehicle_brand=None,
-               shelf_location=None, item_ids=None, sort="product_name", descending=False):
+               shelf_location=None, item_ids=None, sort="product_name", descending=False,
+               warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(f"SELECT {ITEM_COLUMNS} FROM inventory_items")
+        cur.execute(f"SELECT {ITEM_COLUMNS} FROM {items_t}")
         rows = cur.fetchall()
 
     subcat_map = load_subcategory_map(conn)
-    items = [_decorate(r, subcat_map) for r in rows]
+    items = [_decorate(r, subcat_map, cfg) for r in rows]
 
     search_text = (search or "").strip().lower()
     if search_text:
@@ -186,16 +219,18 @@ def list_items(conn, search=None, main_category=None, vehicle_brand=None,
     return items, _summary(items)
 
 
-def get_item(conn, item_id: int):
+def get_item(conn, item_id: int, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(f"SELECT {ITEM_COLUMNS} FROM inventory_items WHERE id = %s", (item_id,))
+        cur.execute(f"SELECT {ITEM_COLUMNS} FROM {items_t} WHERE id = %s", (item_id,))
         row = cur.fetchone()
     if not row:
         raise AppError("Artikeln kunde inte hittas.", 404)
-    return _decorate(row, load_subcategory_map(conn))
+    return _decorate(row, load_subcategory_map(conn), cfg)
 
 
-def find_by_barcode(conn, barcode: str):
+def find_by_barcode(conn, barcode: str, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     barcode = (barcode or "").strip()
     if not barcode:
         raise AppError("Streckkod saknas.")
@@ -203,7 +238,7 @@ def find_by_barcode(conn, barcode: str):
         cur.execute(
             f"""
             SELECT {ITEM_COLUMNS}
-            FROM inventory_items
+            FROM {items_t}
             WHERE UPPER(TRIM(barcode)) = UPPER(%s)
             """,
             (barcode,),
@@ -213,7 +248,7 @@ def find_by_barcode(conn, barcode: str):
         raise AppError(f"Ingen artikel hittades för streckkod: {barcode}", 404)
     if len(matches) > 1:
         raise AppError(f"Flera artiklar har streckkod {barcode}. Rätta dublett i databasen.", 409)
-    return _decorate(matches[0], load_subcategory_map(conn))
+    return _decorate(matches[0], load_subcategory_map(conn), cfg)
 
 
 # ---------------------------------------------------------------- artiklar: skriva
@@ -277,18 +312,19 @@ def _clean_item_input(data: dict):
     }
 
 
-def _check_org_article_no_free(conn, org_article_no, exclude_id=None):
+def _check_org_article_no_free(conn, org_article_no, exclude_id=None, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     if not org_article_no:
         return
     with conn.cursor(row_factory=tuple_row) as cur:
         if exclude_id is None:
             cur.execute(
-                "SELECT id FROM inventory_items WHERE TRIM(org_article_no) = %s",
+                f"SELECT id FROM {items_t} WHERE TRIM(org_article_no) = %s",
                 (org_article_no,),
             )
         else:
             cur.execute(
-                "SELECT id FROM inventory_items WHERE TRIM(org_article_no) = %s AND id <> %s",
+                f"SELECT id FROM {items_t} WHERE TRIM(org_article_no) = %s AND id <> %s",
                 (org_article_no, exclude_id),
             )
         if cur.fetchone():
@@ -325,16 +361,17 @@ def _history_changes(old: dict, new: dict):
     return changes
 
 
-def create_item(conn, data: dict):
+def create_item(conn, data: dict, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     values = _clean_item_input(data)
-    _check_org_article_no_free(conn, values["org_article_no"])
+    _check_org_article_no_free(conn, values["org_article_no"], warehouse=warehouse)
 
     try:
         with conn.transaction():
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
-                    """
-                    INSERT INTO inventory_items
+                    f"""
+                    INSERT INTO {items_t}
                     (product_name, main_category, vehicle_brand, product_brand, barcode,
                      org_article_no, oem, quantity, unit_cost, currency, article_number,
                      shelf_location, last_inventory_check, updated_at)
@@ -349,21 +386,22 @@ def create_item(conn, data: dict):
                     ),
                 )
                 new_id = cur.fetchone()["id"]
-            db.log_item_changes(conn, new_id, [("Artikel", "", "Skapad")])
+            db.log_item_changes(conn, new_id, [("Artikel", "", "Skapad")], table=hist_t)
     except psycopg.errors.UniqueViolation:
         raise AppError("Det finns redan en artikel med detta Org.Artikelnummer eller Artikelnummer.", 409)
     except psycopg.errors.CheckViolation:
         raise AppError("Ogiltig huvudkategori.")
 
-    return get_item(conn, new_id)
+    return get_item(conn, new_id, warehouse)
 
 
-def update_item(conn, item_id: int, data: dict, expected_updated_at=None):
+def update_item(conn, item_id: int, data: dict, expected_updated_at=None, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     values = _clean_item_input(data)
-    _check_org_article_no_free(conn, values["org_article_no"], exclude_id=item_id)
+    _check_org_article_no_free(conn, values["org_article_no"], exclude_id=item_id, warehouse=warehouse)
 
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(f"SELECT {ITEM_COLUMNS} FROM inventory_items WHERE id = %s", (item_id,))
+        cur.execute(f"SELECT {ITEM_COLUMNS} FROM {items_t} WHERE id = %s", (item_id,))
         old = cur.fetchone()
     if not old:
         raise AppError("Artikeln kunde inte hittas.", 404)
@@ -380,8 +418,8 @@ def update_item(conn, item_id: int, data: dict, expected_updated_at=None):
         with conn.transaction():
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    UPDATE inventory_items
+                    f"""
+                    UPDATE {items_t}
                     SET product_name = %s,
                         main_category = %s,
                         vehicle_brand = %s,
@@ -413,42 +451,44 @@ def update_item(conn, item_id: int, data: dict, expected_updated_at=None):
                         "Ladda om artikeln och försök igen.",
                         409,
                     )
-            db.log_item_changes(conn, item_id, changes)
+            db.log_item_changes(conn, item_id, changes, table=hist_t)
     except psycopg.errors.UniqueViolation:
         raise AppError("Det finns redan en artikel med detta Org.Artikelnummer eller Artikelnummer.", 409)
     except psycopg.errors.CheckViolation:
         raise AppError("Ogiltig huvudkategori.")
 
-    return get_item(conn, item_id)
+    return get_item(conn, item_id, warehouse)
 
 
-def delete_item(conn, item_id: int):
+def delete_item(conn, item_id: int, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute("SELECT product_name, article_number FROM inventory_items WHERE id = %s", (item_id,))
+        cur.execute(f"SELECT product_name, article_number FROM {items_t} WHERE id = %s", (item_id,))
         row = cur.fetchone()
     if not row:
         raise AppError("Artikeln kunde inte hittas.", 404)
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM inventory_items WHERE id = %s", (item_id,))
+        cur.execute(f"DELETE FROM {items_t} WHERE id = %s", (item_id,))
     return row
 
 
-def mark_inventoried(conn, item_id: int, today: date = None):
+def mark_inventoried(conn, item_id: int, today: date = None, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     # Datumet kommer från telefonen (dagens datum där användaren står), inte
     # från databasservern - samma tanke som Idag-knappen i skrivbordsprogrammet.
     today = today or date.today()
     with conn.transaction():
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
-                "SELECT last_inventory_check FROM inventory_items WHERE id = %s FOR UPDATE",
+                f"SELECT last_inventory_check FROM {items_t} WHERE id = %s FOR UPDATE",
                 (item_id,),
             )
             row = cur.fetchone()
             if not row:
                 raise AppError("Artikeln kunde inte hittas.", 404)
             cur.execute(
-                """
-                UPDATE inventory_items
+                f"""
+                UPDATE {items_t}
                 SET last_inventory_check = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
                 """,
@@ -458,13 +498,14 @@ def mark_inventoried(conn, item_id: int, today: date = None):
         old_str = old_value.strftime("%Y-%m-%d") if old_value else ""
         new_str = today.strftime("%Y-%m-%d")
         if old_str != new_str:
-            db.log_item_changes(conn, item_id, [("Senast inventerad", old_str, new_str)])
-    return get_item(conn, item_id)
+            db.log_item_changes(conn, item_id, [("Senast inventerad", old_str, new_str)], table=hist_t)
+    return get_item(conn, item_id, warehouse)
 
 
 # ---------------------------------------------------------------- saldo / scan
 
-def adjust_quantity(conn, item_id: int, delta: int, barcode: str = None, note: str = "Scan"):
+def adjust_quantity(conn, item_id: int, delta: int, barcode: str = None, note: str = "Scan", warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     if delta == 0:
         raise AppError("Ändringen måste vara skild från noll.")
     action_type = "IN" if delta > 0 else "OUT"
@@ -472,7 +513,7 @@ def adjust_quantity(conn, item_id: int, delta: int, barcode: str = None, note: s
     with conn.transaction():
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
-                f"SELECT {ITEM_COLUMNS} FROM inventory_items WHERE id = %s FOR UPDATE",
+                f"SELECT {ITEM_COLUMNS} FROM {items_t} WHERE id = %s FOR UPDATE",
                 (item_id,),
             )
             locked = cur.fetchone()
@@ -488,12 +529,12 @@ def adjust_quantity(conn, item_id: int, delta: int, barcode: str = None, note: s
                 )
 
             cur.execute(
-                "UPDATE inventory_items SET quantity = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                f"UPDATE {items_t} SET quantity = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
                 (qty_after, item_id),
             )
             cur.execute(
-                """
-                INSERT INTO inventory_transactions
+                f"""
+                INSERT INTO {tx_t}
                 (item_id, barcode, action_type, qty_change, qty_before, qty_after, note)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 RETURNING id, item_id, barcode, action_type, qty_change, qty_before, qty_after, note,
@@ -507,15 +548,15 @@ def adjust_quantity(conn, item_id: int, delta: int, barcode: str = None, note: s
             )
             tx = cur.fetchone()
 
-    item = get_item(conn, item_id)
+    item = get_item(conn, item_id, warehouse)
     tx = dict(tx)
     tx["product_name"] = item["product_name"]
     tx["article_number"] = item.get("article_number")
     return item, tx
 
 
-def scan(conn, barcode: str, mode: str, qty: int):
-    item = find_by_barcode(conn, barcode)
+def scan(conn, barcode: str, mode: str, qty: int, warehouse=None):
+    item = find_by_barcode(conn, barcode, warehouse)
 
     if mode == "lookup":
         return {
@@ -525,7 +566,7 @@ def scan(conn, barcode: str, mode: str, qty: int):
         }
 
     delta = qty if mode == "in" else -qty
-    item, tx = adjust_quantity(conn, item["id"], delta, barcode=barcode.strip(), note="Scan")
+    item, tx = adjust_quantity(conn, item["id"], delta, barcode=barcode.strip(), note="Scan", warehouse=warehouse)
     sign = "+" if delta > 0 else ""
     return {
         "item": item,
@@ -534,13 +575,14 @@ def scan(conn, barcode: str, mode: str, qty: int):
     }
 
 
-def undo_transaction(conn, tx_id: int):
+def undo_transaction(conn, tx_id: int, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     with conn.transaction():
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
-                """
+                f"""
                 SELECT id, item_id, action_type, qty_change, qty_before, qty_after
-                FROM inventory_transactions
+                FROM {tx_t}
                 WHERE id = %s
                 FOR UPDATE
                 """,
@@ -553,7 +595,7 @@ def undo_transaction(conn, tx_id: int):
                 raise AppError("Endast in/ut-scan kan ångras.")
 
             cur.execute(
-                f"SELECT {ITEM_COLUMNS} FROM inventory_items WHERE id = %s FOR UPDATE",
+                f"SELECT {ITEM_COLUMNS} FROM {items_t} WHERE id = %s FOR UPDATE",
                 (tx["item_id"],),
             )
             item = cur.fetchone()
@@ -573,13 +615,13 @@ def undo_transaction(conn, tx_id: int):
                 raise AppError("Ångra skulle ge negativt saldo.")
 
             cur.execute(
-                "UPDATE inventory_items SET quantity = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                f"UPDATE {items_t} SET quantity = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
                 (new_qty, tx["item_id"]),
             )
             reverse_action = "UNDO_IN" if tx["action_type"] == "IN" else "UNDO_OUT"
             cur.execute(
-                """
-                INSERT INTO inventory_transactions
+                f"""
+                INSERT INTO {tx_t}
                 (item_id, barcode, action_type, qty_change, qty_before, qty_after, note)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 RETURNING id, item_id, barcode, action_type, qty_change, qty_before, qty_after, note,
@@ -592,7 +634,7 @@ def undo_transaction(conn, tx_id: int):
             )
             undo_tx = dict(cur.fetchone())
 
-    refreshed = get_item(conn, tx["item_id"])
+    refreshed = get_item(conn, tx["item_id"], warehouse)
     undo_tx["product_name"] = refreshed["product_name"]
     undo_tx["article_number"] = refreshed.get("article_number")
     return {
@@ -602,15 +644,16 @@ def undo_transaction(conn, tx_id: int):
     }
 
 
-def list_transactions(conn, item_id: int = None, limit: int = 100):
+def list_transactions(conn, item_id: int = None, limit: int = 100, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     limit = max(1, min(int(limit), 1000))
-    sql = """
+    sql = f"""
         SELECT t.id, t.item_id, t.barcode, t.action_type, t.qty_change, t.qty_before,
                t.qty_after, t.note,
                t.created_at AT TIME ZONE current_setting('TimeZone') AS created_at,
                i.product_name, i.article_number
-        FROM inventory_transactions t
-        LEFT JOIN inventory_items i ON i.id = t.item_id
+        FROM {tx_t} t
+        LEFT JOIN {items_t} i ON i.id = t.item_id
     """
     params = []
     if item_id is not None:
@@ -625,27 +668,30 @@ def list_transactions(conn, item_id: int = None, limit: int = 100):
 
 # ---------------------------------------------------------------- historik
 
-def item_history(conn, item_id: int):
-    return db.get_item_history(conn, item_id)
+def item_history(conn, item_id: int, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
+    return db.get_item_history(conn, item_id, table=hist_t)
 
 
-def delete_history_entry(conn, history_id: int):
-    db.delete_history_entry(conn, history_id)
+def delete_history_entry(conn, history_id: int, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
+    db.delete_history_entry(conn, history_id, table=hist_t)
 
 
 # ---------------------------------------------------------------- dubbletter
 
-def duplicates(conn):
+def duplicates(conn, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     result = {
-        "org_article_no": db.find_duplicate_values(conn, "org_article_no"),
-        "article_number": db.find_duplicate_values(conn, "article_number"),
+        "org_article_no": db.find_duplicate_values(conn, "org_article_no", items_t),
+        "article_number": db.find_duplicate_values(conn, "article_number", items_t),
     }
     # Streckkod är inte unik i databasen, men scan-läget kräver att den är det.
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            """
+            f"""
             SELECT UPPER(BTRIM(barcode)) AS value, COUNT(*) AS cnt, ARRAY_AGG(id ORDER BY id) AS ids
-            FROM inventory_items
+            FROM {items_t}
             WHERE barcode IS NOT NULL AND BTRIM(barcode) <> ''
             GROUP BY UPPER(BTRIM(barcode))
             HAVING COUNT(*) > 1
@@ -686,17 +732,37 @@ def _brand_code(vehicle_brands, multifit):
     return "".join(codes)
 
 
+def _supplier_code(supplier):
+    """Leverantörskoden i artikelnumret (nya lagret). Tomt = den första i listan."""
+    codes = [code for code, _name in db.ARTICLE_NUMBER_SUPPLIERS]
+    code = (supplier or "").strip().upper()
+    if not code:
+        if not codes:
+            raise AppError("Välj leverantör innan du genererar ett artikelnummer.")
+        return codes[0]
+    if code not in codes:
+        raise AppError("Ogiltig leverantör.")
+    return code
+
+
 def generate_article_number(conn, k: str, uu: str, vehicle_brands, multifit: bool,
-                            item_id=None, org_article_no=None, overwrite=False):
+                            item_id=None, org_article_no=None, overwrite=False,
+                            supplier=None, warehouse=None):
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
     k = (k or "").strip()
     uu = _validate_subcategory(conn, k, (uu or "").strip())
-    mmm = _brand_code(vehicle_brands or [], multifit)
+    if cfg.get("number_by") == "supplier":
+        # Nya lagret: leverantör istället för fordonsmärke, och bokstaven
+        # (M) direkt framför huvudkategorin - t.ex. M5-02-SMP-000001.
+        mmm = _supplier_code(supplier)
+    else:
+        mmm = _brand_code(vehicle_brands or [], multifit)
 
     # Hitta artikeln som numret ska kopplas till (om någon).
     target = None
     if item_id is not None:
         with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute("SELECT id, product_name, article_number FROM inventory_items WHERE id = %s", (item_id,))
+            cur.execute(f"SELECT id, product_name, article_number FROM {items_t} WHERE id = %s", (item_id,))
             target = cur.fetchone()
         if not target:
             raise AppError("Artikeln kunde inte hittas.", 404)
@@ -704,7 +770,7 @@ def generate_article_number(conn, k: str, uu: str, vehicle_brands, multifit: boo
         org = org_article_no.strip()
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
-                "SELECT id, product_name, article_number FROM inventory_items WHERE TRIM(org_article_no) = %s",
+                f"SELECT id, product_name, article_number FROM {items_t} WHERE TRIM(org_article_no) = %s",
                 (org,),
             )
             rows = cur.fetchall()
@@ -725,7 +791,7 @@ def generate_article_number(conn, k: str, uu: str, vehicle_brands, multifit: boo
         )
 
     try:
-        nr = db.generate_article_number(conn, k, uu, mmm)
+        nr = db.generate_article_number(conn, f"{cfg.get('number_prefix', '')}{k}", uu, mmm)
     except ValueError as e:
         raise AppError(str(e))
 
@@ -733,14 +799,15 @@ def generate_article_number(conn, k: str, uu: str, vehicle_brands, multifit: boo
     if target:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE inventory_items SET article_number = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                f"UPDATE {items_t} SET article_number = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
                 (nr, target["id"]),
             )
         db.log_item_changes(
             conn, target["id"],
             [("Artikelnummer", (target["article_number"] or "").strip(), nr)],
+            table=hist_t,
         )
-        item = get_item(conn, target["id"])
+        item = get_item(conn, target["id"], warehouse)
 
     return nr, item
 
@@ -778,9 +845,11 @@ def delete_used_number(conn, article_number: str):
     Stoppar om numret fortfarande sitter på en lagerartikel."""
     article_number = (article_number or "").strip()
     with conn.cursor(row_factory=tuple_row) as cur:
-        cur.execute("SELECT id FROM inventory_items WHERE article_number = %s", (article_number,))
-        if cur.fetchone():
-            raise AppError("Numret används av en lagerartikel och kan inte tas bort.", 409)
+        # Numren delas av båda lagren - kolla att inget av dem använder det.
+        for wh_cfg in db.WAREHOUSES.values():
+            cur.execute(f"SELECT id FROM {wh_cfg['items']} WHERE article_number = %s", (article_number,))
+            if cur.fetchone():
+                raise AppError("Numret används av en lagerartikel och kan inte tas bort.", 409)
         cur.execute("DELETE FROM used_numbers WHERE article_number = %s", (article_number,))
         if cur.rowcount == 0:
             raise AppError("Numret kunde inte hittas.", 404)
@@ -817,7 +886,7 @@ MEDIA_TYPES = {
 }
 
 
-def build_export(conn, req: dict):
+def build_export(conn, req: dict, warehouse=None):
     """Bygger en ExportSpec exakt som exportdialogen och skriver filen med
     lager_export.py. Returnerar (bytes, filnamn, media type)."""
     fmt = req.get("format", "xlsx")
@@ -834,6 +903,7 @@ def build_export(conn, req: dict):
         vehicle_brand=req.get("vehicle_brand"),
         shelf_location=req.get("shelf_location"),
         item_ids=req.get("item_ids"),
+        warehouse=warehouse,
     )
     # Samma ordning som listan: huvudkategori, underkategori, produktnamn.
     items.sort(key=lambda i: (i["main_label"], i["sub_label"], (i["product_name"] or "").lower()))

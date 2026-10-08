@@ -84,6 +84,18 @@ API:t måste nås från telefonen över internet, via HTTPS. Enklaste vägarna:
 Databasen behöver *inte* vara nåbar från internet – bara API:t. Ligger
 databasen på samma ställe som API:t räcker det.
 
+## Två lager
+
+Appen har två lager, samma som skrivbordsprogrammet: **Lager** (nya, förvalt)
+och **Gamla lagret**. Man växlar överst på flikarna Lager, Scanna och Mer.
+Varje lager har egna tabeller (se `WAREHOUSES` i `db.py`).
+
+Alla endpoints som rör artiklar, scan, historik, dubbletter, export och
+generering av artikelnummer tar `?warehouse=lager` eller `?warehouse=legacy`.
+Utelämnas parametern gäller gamla lagret. `GET /meta` listar lagren och
+leverantörskoderna. I nya lagret genereras artikelnummer per leverantör med M
+framför, t.ex. `M5-02-SMP-000001` (`supplier` i anropet, tomt = den första).
+
 ## Endpoints
 
 Alla ligger under `/api`. Alla utom `/api/health` och `/api/auth/login`

@@ -3,7 +3,7 @@
 
 'use strict';
 
-const APP_VERSION = '2026-09-17c';   // visas på inloggningssidan och under Mer
+const APP_VERSION = '2026-10-09a';   // visas på inloggningssidan och under Mer
 
 // ---------------------------------------------------------------- helpers
 
@@ -52,10 +52,9 @@ const API = {
 
   async req(method, path, { query, body, raw } = {}) {
     let url = this.base + path;
-    if (query) {
-      const q = Object.entries(query).filter(([, v]) => v !== undefined && v !== null && v !== '');
-      if (q.length) url += '?' + new URLSearchParams(q).toString();
-    }
+    // Varje anrop talar om vilket lager det gäller ("lager" = nya, "legacy" = gamla).
+    const q = Object.entries({ ...(query || {}), warehouse: App.warehouse }).filter(([, v]) => v !== undefined && v !== null && v !== '');
+    if (q.length) url += '?' + new URLSearchParams(q).toString();
     const headers = { Accept: 'application/json' };
     if (this.token) headers.Authorization = 'Bearer ' + this.token;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -90,6 +89,8 @@ const App = {
   user: null,
   meta: null,
   route: '',
+  // Vilket lager appen visar: 'lager' (nya, förvalt) eller 'legacy' (gamla lagret).
+  warehouse: localStorage.getItem('momentus.warehouse') === 'legacy' ? 'legacy' : 'lager',
   filters: { search: '', main_category: '', vehicle_brand: '', shelf_location: '', sort: 'product_name', desc: false, grouped: true },
   scan: { mode: 'lookup', qty: 1, lastItem: null, lastTx: null, status: '' },
   itemsCache: null,
@@ -112,6 +113,21 @@ const App = {
 
   async loadMeta() {
     try { this.meta = await API.get('/meta'); } catch { /* shown on use */ }
+  },
+
+  /** Inställningarna för lagret som visas (från /meta), eller null. */
+  whCfg() {
+    return ((this.meta && this.meta.warehouses) || []).find((w) => w.key === this.warehouse) || null;
+  },
+
+  setWarehouse(key) {
+    if (key !== 'lager' && key !== 'legacy') return;
+    this.warehouse = key;
+    localStorage.setItem('momentus.warehouse', key);
+    // Filter, cache och senaste scan hör till det andra lagret - börja om.
+    Object.assign(this.filters, { search: '', main_category: '', vehicle_brand: '', shelf_location: '' });
+    this.itemsCache = null;
+    Object.assign(this.scan, { lastItem: null, lastTx: null, status: '', statusCls: '' });
   },
 
   async login(username, password) {
@@ -173,6 +189,19 @@ function tabbar(active) {
   const tabs = [['inventory', 'tab.inventory', ICONS.box], ['scan', 'tab.scan', ICONS.scan], ['more', 'tab.more', ICONS.more]];
   return `<nav class="tabbar">${tabs.map(([id, key, icon]) =>
     `<button class="${active === id ? 'active' : ''}" data-nav="#/${id}">${icon}<span>${esc(t(key))}</span></button>`).join('')}</nav>`;
+}
+
+// Växla mellan nya Lager och Gamla lagret. Visas överst på Lager, Scanna och Mer.
+function warehouseSwitch() {
+  return `<div class="segmented" id="wh-switch">${['lager', 'legacy'].map((k) =>
+    `<button type="button" data-wh="${k}" class="${App.warehouse === k ? 'active' : ''}">${esc(t('warehouse.' + k))}</button>`).join('')}</div>`;
+}
+function bindWarehouseSwitch(onChange) {
+  $$('#wh-switch [data-wh]').forEach((b) => b.onclick = () => {
+    if (b.dataset.wh === App.warehouse) return;
+    App.setWarehouse(b.dataset.wh);
+    onChange();
+  });
 }
 
 // Global click delegation for navigation
@@ -308,6 +337,7 @@ const InventoryScreen = {
         <button class="icon-btn ${filterActive ? 'badge' : ''}" id="inv-filter" aria-label="${esc(t('inventory.filter'))}">${ICONS.filter}</button>
         <button class="icon-btn" id="inv-add" aria-label="${esc(t('inventory.add'))}">${ICONS.plus}</button>` })}
       <div class="content">
+        ${warehouseSwitch()}
         <div class="search"><input id="inv-search" type="search" placeholder="${esc(t('inventory.searchPrompt'))}" value="${esc(f.search)}" autocapitalize="none" autocorrect="off"></div>
         <div id="inv-list"><div class="empty">${esc(t('loading'))}</div></div>
       </div>
@@ -321,6 +351,7 @@ const InventoryScreen = {
     };
     $('#inv-filter').onclick = () => this.openFilters();
     $('#inv-add').onclick = () => Editor.open(null, () => this.load());
+    bindWarehouseSwitch(() => this.render());
     this.load();
   },
 
@@ -550,13 +581,28 @@ const Editor = {
     const brands = new Set((v.vehicle_brand || '').split('/').map((b) => b.trim().toUpperCase()).filter(Boolean));
     const cats = Object.keys(m.main_categories).sort();
 
+    // Nya lagret: leverantör väljs i stället för "Märke Produkt" (som i
+    // skrivbordsprogrammet). Leverantörens namn sparas som Märke Produkt.
+    const whCfg = App.whCfg();
+    const suppliers = m.suppliers || [];
+    const bySupplier = !!(whCfg && whCfg.number_by === 'supplier' && suppliers.length);
+    let supplierCode = '';
+    if (bySupplier) {
+      const code = parts.length >= 4 ? parts[2].trim().toUpperCase() : '';
+      const brandName = (v.product_brand || '').trim().toUpperCase();
+      const hit = suppliers.find((s) => s.code === code) || suppliers.find((s) => s.name.toUpperCase() === brandName) || suppliers[0];
+      supplierCode = hit.code;
+    }
+
     const bg = openModal(`
       ${topbar(isNew ? t('editor.new') : t('editor.edit'), { actions: `<button class="icon-btn" id="ed-close" aria-label="${esc(t('cancel'))}">✕</button>` })}
       <div class="content">
         <div class="section-title">${esc(t('editor.section.basic'))}</div>
         <div class="card">
           <div class="field"><label>${esc(t('field.productName'))}</label><input id="e-name" value="${esc(v.product_name || '')}" required></div>
-          <div class="field"><label>${esc(t('field.productBrand'))}</label><input id="e-pbrand" value="${esc(v.product_brand || '')}"></div>
+          ${bySupplier
+    ? `<div class="field"><label>${esc(t('field.supplier'))}</label><select id="e-supplier">${suppliers.map((s) => `<option value="${esc(s.code)}" ${supplierCode === s.code ? 'selected' : ''}>${esc(s.code + ' - ' + s.name)}</option>`).join('')}</select></div>`
+    : `<div class="field"><label>${esc(t('field.productBrand'))}</label><input id="e-pbrand" value="${esc(v.product_brand || '')}"></div>`}
           <div class="field"><label>${esc(t('field.shelf'))}</label><input id="e-shelf" class="mono" value="${esc(v.shelf_location || '')}" autocapitalize="characters"></div>
         </div>
         <div class="section-title">${esc(t('editor.section.categories'))}</div>
@@ -614,7 +660,9 @@ const Editor = {
         product_name: q('#e-name').value.trim(),
         main_category: q('#e-cat').value ? m.main_categories[q('#e-cat').value] : '',
         vehicle_brand: m.vehicle_brands.filter((b) => selectedBrands().includes(b)).join('/'),
-        product_brand: q('#e-pbrand').value.trim(),
+        product_brand: bySupplier
+          ? ((suppliers.find((s) => s.code === q('#e-supplier').value) || {}).name || (v.product_brand || ''))
+          : q('#e-pbrand').value.trim(),
         barcode: q('#e-barcode').value.trim().toUpperCase(),
         org_article_no: q('#e-org').value.trim(),
         oem: q('#e-oem').value.trim(),
@@ -711,6 +759,7 @@ const ScanScreen = {
     render(`<div class="screen">
       ${topbar(t('scan.title'))}
       <div class="content">
+        ${warehouseSwitch()}
         <div class="scanner"><video playsinline muted></video><div class="frame"></div><div class="flash" id="sc-flash"></div>
           <div class="overlay" id="sc-msg">${esc(t('scan.starting'))}</div>
           <div class="toggle"><button id="sc-toggle">${esc(t('scan.stop'))}</button></div></div>
@@ -725,6 +774,7 @@ const ScanScreen = {
 
     $('#sc-go').onclick = () => { const v = $('#sc-manual').value.trim(); if (v) { $('#sc-manual').value = ''; this.handle(v); } };
     $('#sc-manual').onkeydown = (e) => { if (e.key === 'Enter') $('#sc-go').click(); };
+    bindWarehouseSwitch(() => { Scanner.stop(); this.render(); });
     $('#sc-toggle').onclick = () => { if (Scanner.active) { Scanner.stop(); $('#sc-toggle').textContent = t('scan.start'); $('#sc-msg').hidden = false; $('#sc-msg').textContent = t('scan.stop'); } else this.startCamera(); };
     this.startCamera();
   },
@@ -780,6 +830,7 @@ const MoreScreen = {
     render(`<div class="screen">
       ${topbar(t('more.title'))}
       <div class="content">
+        ${warehouseSwitch()}
         <div class="card">
           <button class="row-btn" data-nav="#/more/transactions"><span class="label">${esc(t('more.transactions'))}</span><span class="chev">${ICONS.chev}</span></button>
           <button class="row-btn" data-nav="#/more/duplicates"><span class="label">${esc(t('more.duplicates'))}</span><span class="chev">${ICONS.chev}</span></button>
@@ -800,6 +851,7 @@ const MoreScreen = {
       ${tabbar('more')}
     </div>`);
     $$('[data-lang]').forEach((b) => b.onclick = () => { I18N.set(b.dataset.lang); this.render(); });
+    bindWarehouseSwitch(() => this.render());
     $('#mo-logout').onclick = async () => { if (await confirmDialog(t('logout.confirm'), '', t('logout'))) App.logout(); };
   },
 };

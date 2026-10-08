@@ -41,6 +41,8 @@ class MetaResponse(BaseModel):
     sub_categories: list[SubCategory]
     column_definitions: list         # [(key, label, width, anchor)]
     field_labels: dict
+    warehouses: list = []            # [{"key": "lager", "name": "Lager", "number_by": ..., "number_prefix": ...}]
+    suppliers: list = []             # [{"code": "SMP", "name": "SAMPA"}]
 
 
 # ---------------------------------------------------------------- artiklar
@@ -148,6 +150,7 @@ class GenerateArticleNumberRequest(BaseModel):
     uu: str                                  # underkategori "01".."99"
     vehicle_brands: list[str] = []           # ["VOLVO", "SCANIA"] -> "SCVO"
     multifit: bool = False                   # -> "UNI"
+    supplier: Optional[str] = None           # nya lagret: leverantörskod, t.ex. "SMP" (tomt = den första)
     item_id: Optional[int] = None            # koppla numret till denna artikel
     org_article_no: Optional[str] = None     # ...eller till artikeln med detta org-nummer
     overwrite: bool = False                  # tillåt att ersätta befintligt artikelnummer

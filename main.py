@@ -90,6 +90,18 @@ def get_conn(request: Request):
         yield conn
 
 
+def get_warehouse(
+    warehouse: Optional[str] = Query(
+        default=None,
+        description='Vilket lager anropet gäller: "lager" (nya) eller "legacy" (gamla). Utelämnat = gamla.',
+    ),
+):
+    key = warehouse or services.DEFAULT_WAREHOUSE
+    if key not in db.WAREHOUSES:
+        raise HTTPException(status_code=400, detail="Okänt lager.")
+    return key
+
+
 @app.exception_handler(AppError)
 async def app_error_handler(_request: Request, exc: AppError):
     return JSONResponse(status_code=exc.status, content={"detail": exc.message})
@@ -147,41 +159,42 @@ def list_items(
     shelf_location: Optional[str] = None,
     sort: str = "product_name",
     desc: bool = False,
+    wh=Depends(get_warehouse),
     user=Depends(auth.current_user),
     conn=Depends(get_conn),
 ):
     items, summary = services.list_items(
         conn, search=search, main_category=main_category, vehicle_brand=vehicle_brand,
-        shelf_location=shelf_location, sort=sort, descending=desc,
+        shelf_location=shelf_location, sort=sort, descending=desc, warehouse=wh,
     )
     return {"items": items, "summary": summary}
 
 
 @api.get("/items/by-barcode/{barcode}", response_model=schemas.ItemOut, tags=["items"])
-def item_by_barcode(barcode: str, user=Depends(auth.current_user), conn=Depends(get_conn)):
-    return services.find_by_barcode(conn, barcode)
+def item_by_barcode(barcode: str, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    return services.find_by_barcode(conn, barcode, warehouse=wh)
 
 
 @api.get("/items/{item_id}", response_model=schemas.ItemOut, tags=["items"])
-def get_item(item_id: int, user=Depends(auth.current_user), conn=Depends(get_conn)):
-    return services.get_item(conn, item_id)
+def get_item(item_id: int, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    return services.get_item(conn, item_id, warehouse=wh)
 
 
 @api.post("/items", response_model=schemas.ItemOut, status_code=201, tags=["items"])
-def create_item(body: schemas.ItemIn, user=Depends(auth.current_user), conn=Depends(get_conn)):
-    return services.create_item(conn, body.model_dump())
+def create_item(body: schemas.ItemIn, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    return services.create_item(conn, body.model_dump(), warehouse=wh)
 
 
 @api.put("/items/{item_id}", response_model=schemas.ItemOut, tags=["items"])
-def update_item(item_id: int, body: schemas.ItemIn, user=Depends(auth.current_user), conn=Depends(get_conn)):
+def update_item(item_id: int, body: schemas.ItemIn, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
     data = body.model_dump()
     expected = data.pop("expected_updated_at", None)
-    return services.update_item(conn, item_id, data, expected_updated_at=expected)
+    return services.update_item(conn, item_id, data, expected_updated_at=expected, warehouse=wh)
 
 
 @api.delete("/items/{item_id}", response_model=schemas.MessageOut, tags=["items"])
-def delete_item(item_id: int, user=Depends(auth.current_user), conn=Depends(get_conn)):
-    row = services.delete_item(conn, item_id)
+def delete_item(item_id: int, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    row = services.delete_item(conn, item_id, warehouse=wh)
     return {"message": f"Tog bort {row['product_name'] or ''} {row['article_number'] or ''}".strip()}
 
 
@@ -189,15 +202,16 @@ def delete_item(item_id: int, user=Depends(auth.current_user), conn=Depends(get_
 def mark_inventoried(
     item_id: int,
     day: Optional[date] = Query(default=None, description="Dagens datum på telefonen, ÅÅÅÅ-MM-DD"),
+    wh=Depends(get_warehouse),
     user=Depends(auth.current_user),
     conn=Depends(get_conn),
 ):
-    return services.mark_inventoried(conn, item_id, day)
+    return services.mark_inventoried(conn, item_id, day, warehouse=wh)
 
 
 @api.post("/items/{item_id}/adjust", response_model=schemas.ScanResponse, tags=["scan"])
-def adjust_quantity(item_id: int, body: schemas.AdjustRequest, user=Depends(auth.current_user), conn=Depends(get_conn)):
-    item, tx = services.adjust_quantity(conn, item_id, body.delta, note=body.note or "Scan")
+def adjust_quantity(item_id: int, body: schemas.AdjustRequest, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    item, tx = services.adjust_quantity(conn, item_id, body.delta, note=body.note or "Scan", warehouse=wh)
     sign = "+" if body.delta > 0 else ""
     return {
         "item": item,
@@ -207,54 +221,55 @@ def adjust_quantity(item_id: int, body: schemas.AdjustRequest, user=Depends(auth
 
 
 @api.get("/items/{item_id}/history", response_model=list[schemas.HistoryOut], tags=["history"])
-def item_history(item_id: int, user=Depends(auth.current_user), conn=Depends(get_conn)):
-    return services.item_history(conn, item_id)
+def item_history(item_id: int, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    return services.item_history(conn, item_id, warehouse=wh)
 
 
 @api.get("/items/{item_id}/transactions", response_model=list[schemas.TransactionOut], tags=["scan"])
-def item_transactions(item_id: int, limit: int = 100, user=Depends(auth.current_user), conn=Depends(get_conn)):
-    return services.list_transactions(conn, item_id=item_id, limit=limit)
+def item_transactions(item_id: int, limit: int = 100, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    return services.list_transactions(conn, item_id=item_id, limit=limit, warehouse=wh)
 
 
 # ---------------------------------------------------------------- scan
 
 @api.post("/scan", response_model=schemas.ScanResponse, tags=["scan"])
-def scan(body: schemas.ScanRequest, user=Depends(auth.current_user), conn=Depends(get_conn)):
-    return services.scan(conn, body.barcode, body.mode, body.qty)
+def scan(body: schemas.ScanRequest, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    return services.scan(conn, body.barcode, body.mode, body.qty, warehouse=wh)
 
 
 @api.post("/transactions/{tx_id}/undo", response_model=schemas.ScanResponse, tags=["scan"])
-def undo_transaction(tx_id: int, user=Depends(auth.current_user), conn=Depends(get_conn)):
-    return services.undo_transaction(conn, tx_id)
+def undo_transaction(tx_id: int, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    return services.undo_transaction(conn, tx_id, warehouse=wh)
 
 
 @api.get("/transactions", response_model=list[schemas.TransactionOut], tags=["scan"])
-def list_transactions(limit: int = 100, user=Depends(auth.current_user), conn=Depends(get_conn)):
-    return services.list_transactions(conn, limit=limit)
+def list_transactions(limit: int = 100, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    return services.list_transactions(conn, limit=limit, warehouse=wh)
 
 
 # ---------------------------------------------------------------- historik
 
 @api.delete("/history/{history_id}", response_model=schemas.MessageOut, tags=["history"])
-def delete_history(history_id: int, user=Depends(auth.current_user), conn=Depends(get_conn)):
-    services.delete_history_entry(conn, history_id)
+def delete_history(history_id: int, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    services.delete_history_entry(conn, history_id, warehouse=wh)
     return {"message": "Historikposten togs bort."}
 
 
 # ---------------------------------------------------------------- dubbletter
 
 @api.get("/duplicates", response_model=schemas.DuplicatesResponse, tags=["items"])
-def duplicates(user=Depends(auth.current_user), conn=Depends(get_conn)):
-    return services.duplicates(conn)
+def duplicates(wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    return services.duplicates(conn, warehouse=wh)
 
 
 # ---------------------------------------------------------------- artikelnummer
 
 @api.post("/article-numbers/generate", response_model=schemas.GenerateArticleNumberResponse, tags=["article-numbers"])
-def generate_article_number(body: schemas.GenerateArticleNumberRequest, user=Depends(auth.current_user), conn=Depends(get_conn)):
+def generate_article_number(body: schemas.GenerateArticleNumberRequest, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
     nr, item = services.generate_article_number(
         conn, body.k, body.uu, body.vehicle_brands, body.multifit,
         item_id=body.item_id, org_article_no=body.org_article_no, overwrite=body.overwrite,
+        supplier=body.supplier, warehouse=wh,
     )
     return {"article_number": nr, "item": item}
 
@@ -298,8 +313,8 @@ def delete_view(name: str, user=Depends(auth.current_user), conn=Depends(get_con
 # ---------------------------------------------------------------- export
 
 @api.post("/export", tags=["export"])
-def export(body: schemas.ExportRequest, user=Depends(auth.current_user), conn=Depends(get_conn)):
-    data, filename, media_type = services.build_export(conn, body.model_dump())
+def export(body: schemas.ExportRequest, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
+    data, filename, media_type = services.build_export(conn, body.model_dump(), warehouse=wh)
     return Response(
         content=data,
         media_type=media_type,
