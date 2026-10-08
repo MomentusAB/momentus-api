@@ -38,6 +38,8 @@ const STRINGS = {
   "inventory.title": ["Lager", "Inventory"],
   "inventory.searchPrompt": ["Sök namn, artikelnr, streckkod, hylla…", "Search name, article no., barcode, shelf…"],
   "inventory.empty": ["Inga artiklar matchar.", "No items match."],
+  "inventory.expandAll": ["Expandera alla", "Expand all"],
+  "inventory.collapseAll": ["Stäng alla", "Collapse all"],
   "inventory.value": ["Lagervärde", "Inventory value"],
   "inventory.count": ["%d artiklar", "%d items"],
   "inventory.totalQty": ["%d st totalt", "%d units total"],

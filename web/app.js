@@ -3,7 +3,7 @@
 
 'use strict';
 
-const APP_VERSION = '2026-10-09a';   // visas på inloggningssidan och under Mer
+const APP_VERSION = '2026-10-09b';   // visas på inloggningssidan och under Mer
 
 // ---------------------------------------------------------------- helpers
 
@@ -127,6 +127,7 @@ const App = {
     // Filter, cache och senaste scan hör till det andra lagret - börja om.
     Object.assign(this.filters, { search: '', main_category: '', vehicle_brand: '', shelf_location: '' });
     this.itemsCache = null;
+    InventoryScreen.open.clear();
     Object.assign(this.scan, { lastItem: null, lastTx: null, status: '', statusCls: '' });
   },
 
@@ -328,6 +329,11 @@ const InventoryScreen = {
   data: null,
   loading: false,
   searchTimer: null,
+  // Vilka grupper som är utfällda i listan ("m:<huvudkategori>" och
+  // "s:<huvudkategori>|<underkategori>"). Allt är hopfällt från början,
+  // som i skrivbordsprogrammet. Vid sökning visas alla träffar utfällda.
+  open: new Set(),
+  groupKeys: [],
 
   render() {
     const f = App.filters;
@@ -377,20 +383,62 @@ const InventoryScreen = {
     if (!items.length) {
       html += `<div class="empty">${esc(t('inventory.empty'))}</div>`;
     } else if (App.filters.grouped) {
-      const groups = new Map();
+      // Huvudkategori -> underkategori -> artiklar, hopfällbart i två nivåer.
+      const tree = new Map();
       for (const it of items) {
-        const key = it.main_label + '\u0000' + it.sub_label;
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(it);
+        if (!tree.has(it.main_label)) tree.set(it.main_label, new Map());
+        const subs = tree.get(it.main_label);
+        if (!subs.has(it.sub_label)) subs.set(it.sub_label, []);
+        subs.get(it.sub_label).push(it);
       }
-      for (const key of Array.from(groups.keys()).sort()) {
-        const [main, sub] = key.split('\u0000');
-        html += `<div class="group-head">${esc(main)}${sub ? ` <span class="sub">› ${esc(sub)}</span>` : ''}</div><div class="card">${groups.get(key).map(itemRowHtml).join('')}</div>`;
+      const UNCAT = 'Okategoriserade';   // alltid sist, som i skrivbordsprogrammet
+      const mains = Array.from(tree.keys()).filter((k) => k !== UNCAT).sort();
+      if (tree.has(UNCAT)) mains.push(UNCAT);
+
+      const searching = !!App.filters.search.trim();
+      this.groupKeys = [];
+      const toggle = (key, cls, label, count, isOpen) => {
+        const i = this.groupKeys.push(key) - 1;
+        return `<button class="group-toggle ${cls} ${isOpen ? 'open' : ''}" data-gi="${i}" aria-expanded="${isOpen}">
+          <span class="chev">${ICONS.chev}</span><span class="gt-label">${esc(label)}</span><span class="gt-count">${count}</span></button>`;
+      };
+
+      if (!searching) {
+        html += `<div class="group-tools">
+          <button class="btn ghost" id="inv-expand">${esc(t('inventory.expandAll'))}</button>
+          <button class="btn ghost" id="inv-collapse">${esc(t('inventory.collapseAll'))}</button></div>`;
+      }
+      for (const main of mains) {
+        const subs = tree.get(main);
+        const mainKey = 'm:' + main;
+        const mainOpen = searching || this.open.has(mainKey);
+        const mainCount = Array.from(subs.values()).reduce((n, list) => n + list.length, 0);
+        html += toggle(mainKey, 'main', main, mainCount, mainOpen);
+        if (!mainOpen) continue;
+        for (const sub of Array.from(subs.keys()).sort()) {
+          const subKey = 's:' + main + '|' + sub;
+          const subOpen = searching || this.open.has(subKey);
+          html += toggle(subKey, 'sub', sub, subs.get(sub).length, subOpen);
+          if (subOpen) html += `<div class="card group-items">${subs.get(sub).map(itemRowHtml).join('')}</div>`;
+        }
       }
     } else {
       html += `<div class="card">${items.map(itemRowHtml).join('')}</div>`;
     }
     el.innerHTML = html;
+
+    $$('.group-toggle', el).forEach((b) => b.onclick = () => {
+      const key = this.groupKeys[Number(b.dataset.gi)];
+      if (this.open.has(key)) this.open.delete(key); else this.open.add(key);
+      this.renderList();
+    });
+    const expand = $('#inv-expand', el);
+    if (expand) expand.onclick = () => {
+      for (const it of items) { this.open.add('m:' + it.main_label); this.open.add('s:' + it.main_label + '|' + it.sub_label); }
+      this.renderList();
+    };
+    const collapse = $('#inv-collapse', el);
+    if (collapse) collapse.onclick = () => { this.open.clear(); this.renderList(); };
   },
 
   openFilters() {

@@ -90,6 +90,16 @@ a { color: inherit; }
 
 .group-head { padding: 14px 4px 4px; font-size: 13px; font-weight: 700; color: var(--ink-2); }
 .group-head .sub { font-weight: 500; color: var(--ink-3); }
+/* Hopfällbara grupper i lagerlistan: huvudkategori -> underkategori -> artiklar */
+.group-tools { display: flex; gap: 8px; }
+.group-tools .btn { flex: 1; min-height: 38px; font-size: 14px; }
+.group-toggle { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: var(--surface); border-radius: 12px; padding: 12px; min-height: 48px; font-size: 15px; font-weight: 700; color: var(--ink); text-align: left; }
+.group-toggle .chev { display: flex; transition: transform .15s; }
+.group-toggle.open .chev { transform: rotate(90deg); }
+.group-toggle .gt-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-toggle .gt-count { flex: none; font-size: 13px; font-weight: 600; color: var(--ink-3); background: var(--bg); border-radius: 10px; padding: 2px 9px; }
+.group-toggle.sub { margin-left: 14px; width: calc(100% - 14px); min-height: 42px; padding: 9px 12px; font-size: 14px; font-weight: 600; color: var(--ink-2); }
+.group-items { margin-left: 14px; }
 
 /* Summary */
 .summary { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; }
