@@ -113,6 +113,12 @@ class AdjustRequest(BaseModel):
     note: Optional[str] = None
 
 
+class CountRequest(BaseModel):
+    """Inventeringsläget: det antal som faktiskt räknades på hyllan."""
+    counted: int = Field(ge=0)
+    day: Optional[date] = None       # dagens datum på telefonen, ÅÅÅÅ-MM-DD
+
+
 class TransactionOut(BaseModel):
     id: int
     item_id: int
@@ -130,6 +136,14 @@ class TransactionOut(BaseModel):
 class ScanResponse(BaseModel):
     item: ItemOut
     transaction: Optional[TransactionOut] = None
+    message: str
+
+
+class CountResponse(BaseModel):
+    item: ItemOut
+    transaction: Optional[TransactionOut] = None   # bara om saldot ändrades
+    qty_before: int
+    delta: int
     message: str
 
 

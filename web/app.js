@@ -3,7 +3,7 @@
 
 'use strict';
 
-const APP_VERSION = '2026-10-09b';   // visas på inloggningssidan och under Mer
+const APP_VERSION = '2026-10-17';   // visas på inloggningssidan och under Mer
 
 // ---------------------------------------------------------------- helpers
 
@@ -28,6 +28,7 @@ const ICONS = {
   check: '<svg viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></svg>',
   undo: '<svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg>',
   camera: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+  clipboard: '<svg viewBox="0 0 24 24"><path d="M9 4h6v3H9z"/><path d="M15 5h3v15H6V5h3"/><path d="m8.5 13 2.5 2.5 4.5-5"/></svg>',
 };
 
 let toastTimer;
@@ -129,6 +130,7 @@ const App = {
     this.itemsCache = null;
     InventoryScreen.open.clear();
     Object.assign(this.scan, { lastItem: null, lastTx: null, status: '', statusCls: '' });
+    CountScreen.items = null;
   },
 
   async login(username, password) {
@@ -166,6 +168,7 @@ const App = {
     if (parts[0] === 'inventory') InventoryScreen.render();
     else if (parts[0] === 'item') ItemScreen.render(Number(parts[1]));
     else if (parts[0] === 'scan') ScanScreen.render();
+    else if (parts[0] === 'count') CountScreen.render();
     else if (parts[0] === 'more' && parts[1] === 'transactions') TransactionsScreen.render();
     else if (parts[0] === 'more' && parts[1] === 'duplicates') DuplicatesScreen.render();
     else if (parts[0] === 'more' && parts[1] === 'export') ExportScreen.render();
@@ -187,7 +190,7 @@ function topbar(title, { back, actions = '' } = {}) {
 }
 
 function tabbar(active) {
-  const tabs = [['inventory', 'tab.inventory', ICONS.box], ['scan', 'tab.scan', ICONS.scan], ['more', 'tab.more', ICONS.more]];
+  const tabs = [['inventory', 'tab.inventory', ICONS.box], ['scan', 'tab.scan', ICONS.scan], ['count', 'tab.count', ICONS.clipboard], ['more', 'tab.more', ICONS.more]];
   return `<nav class="tabbar">${tabs.map(([id, key, icon]) =>
     `<button class="${active === id ? 'active' : ''}" data-nav="#/${id}">${icon}<span>${esc(t(key))}</span></button>`).join('')}</nav>`;
 }
@@ -868,6 +871,256 @@ const ScanScreen = {
     }
     this.busy = false;
     this.drawResult();
+  },
+};
+
+
+// ---------------------------------------------------------------- count (inventeringsläge)
+
+/* Inventeringsläget: en lista över vad som är kvar att räkna. Varje avbockning
+   sparas direkt i databasen (saldo + "Senast inventerad"), så listan går att
+   plocka upp igen på vilken telefon som helst. "Kvar" = artiklar vars
+   Senast inventerad ligger före startdatumet. Startdatum och urval sparas
+   lokalt per lager. */
+const CountScreen = {
+  items: null,        // alla artiklar i urvalet, från /items
+  search: '',
+  showDone: false,
+  busy: false,
+
+  key() { return 'momentus.count.' + App.warehouse; },
+  session() { try { return JSON.parse(localStorage.getItem(this.key()) || 'null'); } catch { return null; } },
+  saveSession(sess) { if (sess) localStorage.setItem(this.key(), JSON.stringify(sess)); else localStorage.removeItem(this.key()); },
+
+  isDone(item, sess) { return !!item.last_inventory_check && item.last_inventory_check >= sess.startDate; },
+  remaining(sess) { return (this.items || []).filter((i) => !this.isDone(i, sess)); },
+  done(sess) { return (this.items || []).filter((i) => this.isDone(i, sess)); },
+
+  render() {
+    const sess = this.session();
+    if (!sess) { this.renderStart(); return; }
+    render(`<div class="screen">
+      ${topbar(t('count.title'), { actions: `
+        <button class="icon-btn" id="ct-scan" aria-label="${esc(t('field.barcode'))}">${ICONS.camera}</button>
+        <button class="icon-btn" id="ct-menu">${ICONS.menu}</button>` })}
+      <div class="content">
+        <div class="card"><div class="count-progress" id="ct-progress"></div></div>
+        <div class="search"><input id="ct-search" type="search" placeholder="${esc(t('count.searchPrompt'))}" value="${esc(this.search)}" autocapitalize="none" autocorrect="off"></div>
+        <div id="ct-list"><div class="empty">${esc(t('loading'))}</div></div>
+      </div>
+      ${tabbar('count')}
+    </div>`);
+    $('#ct-search').oninput = (e) => { this.search = e.target.value; this.renderList(); };
+    $('#ct-scan').onclick = () => Scanner.captureOnce((code) => this.scanned(code));
+    $('#ct-menu').onclick = () => this.menu();
+    this.load();
+  },
+
+  renderStart() {
+    const m = App.meta || { main_categories: {} };
+    const cats = Object.keys(m.main_categories).sort();
+    const shelves = Array.from(new Set((App.itemsCache || []).map((i) => (i.shelf_location || '').trim()).filter(Boolean))).sort();
+    render(`<div class="screen">
+      ${topbar(t('count.title'))}
+      <div class="content">
+        ${warehouseSwitch()}
+        <div class="card"><div class="row" style="flex-direction:column;align-items:flex-start;gap:6px">
+          <b>${esc(t('count.title'))}</b><div class="muted small">${esc(t('count.intro'))}</div></div></div>
+        <div class="section-title">${esc(t('count.scope'))}</div>
+        <div class="card">
+          <div class="field"><label>${esc(t('inventory.filter.shelf'))}</label>
+            <select id="ct-shelf"><option value="">${esc(t('count.scope.all'))}</option>${shelves.map((s) => `<option>${esc(s)}</option>`).join('')}</select></div>
+          <div class="field"><label>${esc(t('inventory.filter.category'))}</label>
+            <select id="ct-cat"><option value="">${esc(t('all'))}</option>${cats.map((k) => `<option value="${k}">${esc(m.main_categories[k])}</option>`).join('')}</select></div>
+        </div>
+        <button class="btn primary big" id="ct-start">${ICONS.check}${esc(t('count.start'))}</button>
+      </div>
+      ${tabbar('count')}
+    </div>`);
+    bindWarehouseSwitch(() => this.render());
+    // Hyllistan bygger på senast laddade lagerlista - hämta den om den saknas.
+    if (!App.itemsCache) API.get('/items').then((r) => { App.itemsCache = r.items; if (location.hash === '#/count' && !this.session()) this.renderStart(); }).catch(() => {});
+    $('#ct-start').onclick = () => {
+      this.saveSession({ startDate: today(), shelf: $('#ct-shelf').value, main_category: $('#ct-cat').value, diffs: [] });
+      this.search = ''; this.showDone = false; this.items = null;
+      this.render();
+    };
+  },
+
+  async load() {
+    const sess = this.session(); if (!sess || !$('#ct-list')) return;
+    try {
+      const r = await API.get('/items', { main_category: sess.main_category, shelf_location: sess.shelf, sort: 'shelf_location' });
+      this.items = r.items;
+      this.renderList();
+    } catch (e) { toast(e.message, true); }
+  },
+
+  rowHtml(item, done) {
+    const shelf = (item.shelf_location || '').trim();
+    return `<div class="count-row ${done ? 'done' : ''}" data-id="${item.id}">
+      <button class="count-main" data-act="count">
+        <div class="name">${esc(item.product_name)}</div>
+        <div class="meta">
+          ${item.article_number ? `<span class="artno">${esc(item.article_number)}</span>` : ''}
+          ${shelf ? `<span class="shelf-tag">${esc(shelf)}</span>` : ''}
+        </div>
+      </button>
+      <div class="count-qty">${item.quantity}</div>
+      <button class="count-tick" data-act="${done ? 'count' : 'tick'}" aria-label="${esc(done ? t('count.recount') : t('count.tick'))}">${done ? ICONS.refresh : ICONS.check}</button>
+    </div>`;
+  },
+
+  renderList() {
+    const el = $('#ct-list'); const sess = this.session();
+    if (!el || !sess || !this.items) return;
+    const total = this.items.length;
+    const doneList = this.done(sess);
+    let rem = this.remaining(sess);
+    const q = this.search.trim().toLowerCase();
+    if (q) rem = rem.filter((i) => [i.product_name, i.article_number, i.barcode, i.shelf_location, i.org_article_no, i.oem].some((v) => (v || '').toLowerCase().includes(q)));
+
+    const pct = total ? Math.round(doneList.length / total * 100) : 0;
+    $('#ct-progress').innerHTML = `
+      <div class="count-progress-text"><b>${esc(t('count.remaining', total - doneList.length, total))}</b><span class="muted small">${esc(t('count.started', sess.startDate))}${sess.shelf ? ' · ' + esc(sess.shelf) : ''}</span></div>
+      <div class="bar"><div style="width:${pct}%"></div></div>`;
+
+    let html = '';
+    if (!total) html += `<div class="empty">${esc(t('count.nothing'))}</div>`;
+    else if (!rem.length && !q) html += `<div class="empty count-alldone">${esc(t('count.allDone'))}</div>`;
+    else if (!rem.length) html += `<div class="empty">${esc(t('inventory.empty'))}</div>`;
+    else {
+      // Grupperat per hylla så att man kan gå hylla för hylla.
+      const byShelf = new Map();
+      for (const it of rem) { const k = (it.shelf_location || '').trim() || '–'; if (!byShelf.has(k)) byShelf.set(k, []); byShelf.get(k).push(it); }
+      for (const [shelf, list] of byShelf) {
+        html += `<div class="group-head">${esc(shelf)} <span class="sub">${list.length}</span></div><div class="card">${list.map((i) => this.rowHtml(i, false)).join('')}</div>`;
+      }
+    }
+    if (doneList.length) {
+      html += `<button class="btn ghost" id="ct-toggle-done">${esc(this.showDone ? t('count.hideDone', doneList.length) : t('count.showDone', doneList.length))}</button>`;
+      if (this.showDone) html += `<div class="card">${doneList.slice().reverse().map((i) => this.rowHtml(i, true)).join('')}</div>`;
+    }
+    if (!rem.length && !q && total) html += `<button class="btn primary big" id="ct-finish">${esc(t('count.finish'))}</button>`;
+    el.innerHTML = html;
+
+    $$('.count-row', el).forEach((row) => {
+      const item = this.items.find((i) => i.id === Number(row.dataset.id));
+      $$('[data-act]', row).forEach((b) => b.onclick = () => (b.dataset.act === 'tick' ? this.tick(item, row) : this.openSheet(item)));
+    });
+    const tog = $('#ct-toggle-done', el); if (tog) tog.onclick = () => { this.showDone = !this.showDone; this.renderList(); };
+    const fin = $('#ct-finish', el); if (fin) fin.onclick = () => this.finish();
+  },
+
+  /** Bocka av: räknat antal = saldot i systemet. */
+  async tick(item, row) {
+    if (this.busy) return;
+    this.busy = true;
+    row.classList.add('ticked');
+    try {
+      await this.submit(item, item.quantity);
+      haptic(true);
+      setTimeout(() => this.renderList(), 180);
+    } catch (e) { row.classList.remove('ticked'); haptic(false); toast(e.message, true); }
+    this.busy = false;
+  },
+
+  async submit(item, counted) {
+    const r = await API.post(`/items/${item.id}/count`, { counted, day: today() });
+    Object.assign(item, r.item);
+    const sess = this.session();
+    if (sess) {
+      sess.diffs = (sess.diffs || []).filter((d) => d.id !== item.id);
+      if (r.delta !== 0) sess.diffs.push({ id: item.id, name: item.product_name, before: r.qty_before, after: counted });
+      this.saveSession(sess);
+    }
+    if (r.delta !== 0) toast(t('count.diff', r.qty_before, counted, (r.delta > 0 ? '+' : '') + r.delta));
+    return r;
+  },
+
+  /** Ange räknat antal för hand. */
+  openSheet(item) {
+    let n = item.quantity;
+    const bg = openModal(`
+      ${topbar(t('count.sheet.title'), { actions: `<button class="icon-btn" id="cs-close">✕</button>` })}
+      <div class="content">
+        <div class="card">
+          <div class="row" style="flex-direction:column;align-items:flex-start;gap:4px"><b>${esc(item.product_name)}</b>
+            <div class="small muted">${esc(item.article_number || '')} ${item.shelf_location ? `<span class="shelf-tag">${esc(item.shelf_location)}</span>` : ''}</div></div>
+          <div class="row"><span class="label muted">${esc(t('count.sheet.system'))}</span><span class="value" style="font-weight:700;font-size:18px">${item.quantity}</span></div>
+          <div class="count-input">
+            <button id="cs-minus">−</button>
+            <input id="cs-val" type="number" inputmode="numeric" min="0" value="${n}">
+            <button id="cs-plus">+</button>
+          </div>
+        </div>
+        <button class="btn primary big" id="cs-save">${esc(t('count.sheet.save'))}</button>
+        <button class="btn" id="cs-match">${ICONS.check}${esc(t('count.sheet.match', item.quantity))}</button>
+      </div>`);
+    const inp = $('#cs-val', bg);
+    const set = (v) => { n = Math.max(0, Math.min(999999, Number.isNaN(v) ? 0 : v)); inp.value = n; };
+    $('#cs-minus', bg).onclick = () => set(n - 1);
+    $('#cs-plus', bg).onclick = () => set(n + 1);
+    inp.oninput = () => set(parseInt(inp.value, 10));
+    inp.onfocus = () => inp.select();
+    $('#cs-close', bg).onclick = closeModal;
+    const save = async (val) => {
+      $('#cs-save', bg).disabled = true;
+      try { await this.submit(item, val); haptic(true); closeModal(); this.renderList(); }
+      catch (e) { haptic(false); toast(e.message, true); $('#cs-save', bg).disabled = false; }
+    };
+    $('#cs-save', bg).onclick = () => save(n);
+    $('#cs-match', bg).onclick = () => save(item.quantity);
+    setTimeout(() => inp.focus(), 50);
+  },
+
+  async scanned(code) {
+    const sess = this.session(); if (!sess) return;
+    const c = code.trim().toUpperCase();
+    let item = (this.items || []).find((i) => (i.barcode || '').trim().toUpperCase() === c);
+    if (!item) {
+      try { await API.get('/items/by-barcode/' + encodeURIComponent(c)); toast(t('count.scanNotInList'), true); }
+      catch { toast(t('count.barcodeMissing'), true); }
+      haptic(false); return;
+    }
+    haptic(true);
+    this.openSheet(item);
+  },
+
+  menu() {
+    const bg = openModal(`<div class="sheet-actions">
+      <button class="btn" id="cm-finish">${esc(t('count.finish'))}</button>
+      <button class="btn danger" id="cm-abort">${esc(t('count.abort'))}</button>
+      <button class="btn ghost" id="cm-cancel">${esc(t('cancel'))}</button></div>`);
+    $('#cm-cancel', bg).onclick = closeModal;
+    $('#cm-finish', bg).onclick = () => { closeModal(); this.finish(); };
+    $('#cm-abort', bg).onclick = async () => {
+      closeModal();
+      if (!await confirmDialog(t('count.abort'), t('count.abort.confirm'), t('count.abort'))) return;
+      this.saveSession(null); this.items = null; this.render();
+    };
+  },
+
+  async finish() {
+    const sess = this.session(); if (!sess) return;
+    const rem = this.remaining(sess);
+    if (rem.length && !await confirmDialog(t('count.finish.confirm'), t('count.finish.message', rem.length), t('count.finish'), false)) return;
+    const diffs = sess.diffs || [];
+    const bg = openModal(`
+      ${topbar(t('count.summary.title'), { actions: `<button class="icon-btn" id="cf-close">✕</button>` })}
+      <div class="content">
+        <div class="card"><div class="row"><b>${esc(t('count.summary.counted', this.done(sess).length))}</b></div>
+          <div class="row muted small">${esc(t('count.started', sess.startDate))}${sess.shelf ? ' · ' + esc(sess.shelf) : ''}</div></div>
+        <div class="section-title">${esc(t('count.summary.diffs'))}</div>
+        <div class="card">${diffs.length ? diffs.map((d) => `<div class="row"><span class="label">${esc(d.name)}</span>
+          <span class="value" style="font-variant-numeric:tabular-nums">${d.before} → ${d.after} <b class="${d.after > d.before ? 'in-ink' : 'out-ink'}">(${d.after > d.before ? '+' : ''}${d.after - d.before})</b></span></div>`).join('')
+        : `<div class="row muted">${esc(t('count.summary.noDiffs'))}</div>`}</div>
+        ${rem.length ? `<div class="section-title">${esc(t('count.summary.remaining'))}</div><div class="card">${rem.map((i) => `<div class="row"><span class="label">${esc(i.product_name)}</span><span class="value small">${esc(i.shelf_location || '')}</span></div>`).join('')}</div>` : ''}
+        <button class="btn primary big" id="cf-ok">${esc(t('done'))}</button>
+      </div>`);
+    const end = () => { closeModal(); this.saveSession(null); this.items = null; this.render(); };
+    $('#cf-ok', bg).onclick = end;
+    $('#cf-close', bg).onclick = end;
   },
 };
 

@@ -502,6 +502,73 @@ def mark_inventoried(conn, item_id: int, today: date = None, warehouse=None):
     return get_item(conn, item_id, warehouse)
 
 
+def count_item(conn, item_id: int, counted: int, today: date = None, warehouse=None):
+    """Inventeringsläget: registrera räknat antal för en artikel.
+
+    Skiljer sig det räknade antalet från saldot bokförs skillnaden som en
+    in/ut-händelse med noteringen "Inventering" (samma spår som en scan), och
+    artikeln märks sedan som inventerad dagens datum. Allt sker i en
+    transaktion så att saldot och inventeringsdatumet alltid hör ihop."""
+    items_t, hist_t, tx_t, cfg = _tables(warehouse)
+    if counted < 0:
+        raise AppError("Räknat antal kan inte vara negativt.")
+    today = today or date.today()
+    tx = None
+
+    with conn.transaction():
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                f"SELECT {ITEM_COLUMNS} FROM {items_t} WHERE id = %s FOR UPDATE",
+                (item_id,),
+            )
+            locked = cur.fetchone()
+            if not locked:
+                raise AppError("Artikeln kunde inte hittas.", 404)
+
+            qty_before = int(locked["quantity"] or 0)
+            delta = counted - qty_before
+            if delta != 0:
+                cur.execute(
+                    f"""
+                    INSERT INTO {tx_t}
+                    (item_id, barcode, action_type, qty_change, qty_before, qty_after, note)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, item_id, barcode, action_type, qty_change, qty_before, qty_after, note,
+                              created_at AT TIME ZONE current_setting('TimeZone') AS created_at
+                    """,
+                    (
+                        item_id, locked["barcode"] or "",
+                        "IN" if delta > 0 else "OUT", delta, qty_before, counted, "Inventering",
+                    ),
+                )
+                tx = dict(cur.fetchone())
+
+            cur.execute(
+                f"""
+                UPDATE {items_t}
+                SET quantity = %s, last_inventory_check = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (counted, today, item_id),
+            )
+
+        old_value = locked["last_inventory_check"]
+        old_str = old_value.strftime("%Y-%m-%d") if old_value else ""
+        new_str = today.strftime("%Y-%m-%d")
+        if old_str != new_str:
+            db.log_item_changes(conn, item_id, [("Senast inventerad", old_str, new_str)], table=hist_t)
+
+    item = get_item(conn, item_id, warehouse)
+    if tx:
+        tx["product_name"] = item["product_name"]
+        tx["article_number"] = item.get("article_number")
+        sign = "+" if delta > 0 else ""
+        message = f"{item['product_name']}: {qty_before} → {counted} ({sign}{delta})"
+    else:
+        message = f"{item['product_name']}: {counted} st, stämmer."
+    return {"item": item, "transaction": tx, "qty_before": qty_before, "delta": delta, "message": message}
+
+
 # ---------------------------------------------------------------- saldo / scan
 
 def adjust_quantity(conn, item_id: int, delta: int, barcode: str = None, note: str = "Scan", warehouse=None):

@@ -54,7 +54,7 @@ a { color: inherit; }
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
   height: calc(var(--tab-h) + var(--safe-bottom)); padding-bottom: var(--safe-bottom);
   background: var(--surface); border-top: 1px solid var(--line);
-  display: grid; grid-template-columns: repeat(3, 1fr);
+  display: grid; grid-template-columns: repeat(4, 1fr);
 }
 .tabbar button { background: none; border: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--ink-3); font-size: 11px; font-weight: 600; }
 .tabbar button svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -187,6 +187,31 @@ a { color: inherit; }
 .modal .content .card, .modal .content .field, .modal .content .chips { flex: none; height: auto; max-height: none; min-height: 0; }
 body.modal-open { overflow: hidden; }
 .sheet-actions { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+
+/* ---------- Inventeringsläge ---------- */
+.count-progress { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.count-progress-text { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.count-progress .bar { height: 8px; background: #E2E6EA; border-radius: 999px; overflow: hidden; }
+.count-progress .bar > div { height: 100%; background: var(--in); border-radius: 999px; transition: width .25s; }
+.count-row { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 0; border-top: 1px solid var(--line); min-height: 60px; transition: opacity .18s, transform .18s; }
+.card > .count-row:first-child { border-top: 0; }
+.count-row.ticked { opacity: 0; transform: translateX(40px); }
+.count-row.done { opacity: .7; }
+.count-main { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+.count-main .name { font-weight: 600; line-height: 1.25; }
+.count-main .meta { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 13px; color: var(--ink-2); align-items: center; }
+.count-main .artno { font-family: var(--mono); font-size: 13px; color: var(--ink); }
+.count-qty { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+.count-tick { flex: none; width: 52px; height: 52px; border-radius: 12px; border: 0; background: var(--in); color: #fff; display: inline-flex; align-items: center; justify-content: center; }
+.count-tick:active { filter: brightness(.9); }
+.count-row.done .count-tick { background: #E2E6EA; color: var(--ink-2); }
+.count-tick svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.count-alldone { font-size: 20px; font-weight: 700; color: var(--in); }
+.count-input { display: flex; align-items: stretch; border-top: 1px solid var(--line); }
+.count-input button { flex: 1; border: 0; background: var(--surface); font-size: 32px; min-height: 76px; }
+.count-input input { width: 120px; text-align: center; border: 0; border-left: 1px solid var(--line); border-right: 1px solid var(--line); font-size: 36px; font-weight: 700; font-variant-numeric: tabular-nums; outline: none; }
+.in-ink { color: var(--in); }
+.out-ink { color: var(--out); }
 
 /* ---------- Toast ---------- */
 .toast { position: fixed; left: 12px; right: 12px; bottom: calc(var(--tab-h) + var(--safe-bottom) + 12px); z-index: 60; background: var(--ink); color: #fff; padding: 12px 16px; border-radius: var(--radius); font-size: 15px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }

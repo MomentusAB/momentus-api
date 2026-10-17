@@ -17,8 +17,8 @@ Momentus från sin egen ikon i helskärm, utan webbläsarkanter. På Android:
 webbläsarmenyn → **Lägg till på startskärmen**.
 
 Fyra flikar: **Lager** (sök, filter, gruppering, lagervärde, +1/−1),
-**Scanna** (kamera, sök/inleverans/uttag, ångra), **Artikelnr** (generator
-och senaste nummer) och **Mer** (alla händelser, dubbletter, export,
+**Scanna** (kamera, sök/inleverans/uttag, ångra), **Inventera**
+(inventeringsläge, se nedan) och **Mer** (alla händelser, dubbletter, export,
 språk, utloggning). Artikelsidan har saldo in/ut, markera inventerad,
 historik, händelser, redigera och ta bort. Språk: svenska/engelska, byts i appen.
 
@@ -30,6 +30,26 @@ Streckkodsläsaren använder ett litet bibliotek (`@zxing/library`) som laddas
 från unpkg.com. Vill du slippa det beroendet: ladda ned
 `https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js` till `web/zxing.min.js`
 och ändra `<script src=...>` i `web/index.html` till `zxing.min.js`.
+
+## Inventeringsläge (fliken Inventera)
+
+Välj vad som ska inventeras (hela lagret, en hylla eller en huvudkategori)
+och tryck **Starta inventering**. Appen visar en lista, grupperad per hylla,
+över allt som är kvar att räkna. För varje artikel:
+
+- **Bocka av** (grön knapp) = antalet på hyllan stämmer med saldot.
+- Tryck på artikeln = ange räknat antal. Skiljer det sig från saldot sätts
+  saldot till det räknade och skillnaden bokförs som en in/ut-händelse med
+  noteringen "Inventering".
+- Kameraknappen överst = scanna en streckkod och ange antalet för den artikeln.
+
+Varje avbockning sparas direkt (saldo + "Senast inventerad"), så listan
+krymper tills allt är klart och går att fortsätta på en annan telefon samma
+dag. "Kvar" = artiklar vars Senast inventerad ligger före startdatumet.
+**Visa klara** visar det som bockats av och låter dig räkna om. **Avsluta
+inventering** visar en sammanfattning med avvikelser.
+
+Endpoint: `POST /items/{id}/count` `{counted, day?}` → `{item, transaction?, qty_before, delta, message}`.
 
 ## Innehåll
 
@@ -115,6 +135,8 @@ kräver `Authorization: Bearer <token>`.
 - `POST /items` – skapa. `PUT /items/{id}` – uppdatera (skicka `expected_updated_at`
   från senaste läsning; 409 om någon annan hunnit ändra). `DELETE /items/{id}`
 - `POST /items/{id}/inventoried?day=2026-09-14` – "Markera som inventerad"
+- `POST /items/{id}/count` `{counted, day?}` – inventeringsläget: sätt saldot till räknat antal
+  (skillnad bokförs som händelse "Inventering") och märk artikeln inventerad
 - `GET /items/{id}/history` – ändringshistorik. `DELETE /history/{id}`
 - `GET /items/{id}/transactions` – in/ut-händelser
 
