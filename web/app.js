@@ -3,7 +3,7 @@
 
 'use strict';
 
-const APP_VERSION = '2026-10-17b';   // visas på inloggningssidan och under Mer
+const APP_VERSION = '2026-10-17c';   // visas på inloggningssidan och under Mer
 
 // ---------------------------------------------------------------- helpers
 
@@ -974,7 +974,7 @@ const CountScreen = {
       <button class="count-main" data-act="count">
         <div class="name">${esc(item.product_name)}</div>
         <div class="meta">
-          ${item.article_number ? `<span class="artno">${esc(item.article_number)}</span>` : ''}
+          ${item.org_article_no ? `<span class="artno">${esc(item.org_article_no)}</span>` : ''}
           ${shelf ? `<span class="shelf-tag">${esc(shelf)}</span>` : ''}
         </div>
       </button>
@@ -1067,7 +1067,7 @@ const CountScreen = {
       <div class="content">
         <div class="card">
           <div class="row" style="flex-direction:column;align-items:flex-start;gap:4px"><b>${esc(item.product_name)}</b>
-            <div class="small muted">${esc(item.article_number || '')} ${item.shelf_location ? `<span class="shelf-tag">${esc(item.shelf_location)}</span>` : ''}</div></div>
+            <div class="small muted">${esc(item.org_article_no || '')} ${item.shelf_location ? `<span class="shelf-tag">${esc(item.shelf_location)}</span>` : ''}</div></div>
           <div class="row"><span class="label muted">${esc(t('count.sheet.system'))}</span><span class="value" style="font-weight:700;font-size:18px">${item.quantity}</span></div>
           <div class="count-input">
             <button id="cs-minus">−</button>
