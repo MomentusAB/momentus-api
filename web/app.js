@@ -3,7 +3,7 @@
 
 'use strict';
 
-const APP_VERSION = '2026-10-17c';   // visas på inloggningssidan och under Mer
+const APP_VERSION = '2026-10-17d';   // visas på inloggningssidan och under Mer
 
 // ---------------------------------------------------------------- helpers
 
@@ -1046,8 +1046,10 @@ const CountScreen = {
     this.busy = false;
   },
 
-  async submit(item, counted) {
-    const r = await API.post(`/items/${item.id}/count`, { counted, day: today() });
+  async submit(item, counted, shelf) {
+    const body = { counted, day: today() };
+    if (shelf !== undefined) body.shelf_location = shelf;
+    const r = await API.post(`/items/${item.id}/count`, body);
     Object.assign(item, r.item);
     const sess = this.session();
     if (sess) {
@@ -1059,9 +1061,15 @@ const CountScreen = {
     return r;
   },
 
-  /** Ange räknat antal för hand. */
+  /** Alla hyllplatser som finns i urvalet, för förslagslistan i antalsrutan. */
+  shelves() {
+    return Array.from(new Set((this.items || []).map((i) => (i.shelf_location || '').trim()).filter(Boolean))).sort(naturalCompare);
+  },
+
+  /** Ange räknat antal för hand (och hyllplats, om artikeln saknar en eller ska flyttas). */
   openSheet(item) {
     let n = item.quantity;
+    const curShelf = (item.shelf_location || '').trim();
     const bg = openModal(`
       ${topbar(t('count.sheet.title'), { actions: `<button class="icon-btn" id="cs-close">✕</button>` })}
       <div class="content">
@@ -1074,6 +1082,9 @@ const CountScreen = {
             <input id="cs-val" type="number" inputmode="numeric" min="0" value="${n}">
             <button id="cs-plus">+</button>
           </div>
+          <div class="field"><label>${esc(curShelf ? t('field.shelf') : t('count.sheet.noShelf'))}</label>
+            <input id="cs-shelf" class="mono" list="cs-shelves" value="${esc(curShelf)}" placeholder="${esc(t('count.sheet.shelfPlaceholder'))}" autocapitalize="characters" autocorrect="off">
+            <datalist id="cs-shelves">${this.shelves().map((sh) => `<option value="${esc(sh)}">`).join('')}</datalist></div>
         </div>
         <button class="btn primary big" id="cs-save">${esc(t('count.sheet.save'))}</button>
         <button class="btn" id="cs-match">${ICONS.check}${esc(t('count.sheet.match', item.quantity))}</button>
@@ -1087,7 +1098,8 @@ const CountScreen = {
     $('#cs-close', bg).onclick = closeModal;
     const save = async (val) => {
       $('#cs-save', bg).disabled = true;
-      try { await this.submit(item, val); haptic(true); closeModal(); this.renderList(); }
+      const shelf = $('#cs-shelf', bg).value.trim().toUpperCase();
+      try { await this.submit(item, val, shelf !== curShelf ? shelf : undefined); haptic(true); closeModal(); this.renderList(); }
       catch (e) { haptic(false); toast(e.message, true); $('#cs-save', bg).disabled = false; }
     };
     $('#cs-save', bg).onclick = () => save(n);

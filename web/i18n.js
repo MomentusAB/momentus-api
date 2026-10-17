@@ -232,6 +232,8 @@ const STRINGS = {
   "count.group.category": ["Kategori", "Category"],
   "count.group.none": ["Lista", "List"],
   "count.group.noShelf": ["Utan hyllplats", "No shelf location"],
+  "count.sheet.noShelf": ["Hyllplats (saknas – ange här)", "Shelf location (missing – set it here)"],
+  "count.sheet.shelfPlaceholder": ["t.ex. A3", "e.g. A3"],
 };
 
 const I18N = {

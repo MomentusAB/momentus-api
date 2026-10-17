@@ -117,6 +117,7 @@ class CountRequest(BaseModel):
     """Inventeringsläget: det antal som faktiskt räknades på hyllan."""
     counted: int = Field(ge=0)
     day: Optional[date] = None       # dagens datum på telefonen, ÅÅÅÅ-MM-DD
+    shelf_location: Optional[str] = None   # utelämnad = rör inte hyllplatsen; "" = ta bort
 
 
 class TransactionOut(BaseModel):

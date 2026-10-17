@@ -213,7 +213,7 @@ def mark_inventoried(
 def count_item(item_id: int, body: schemas.CountRequest, wh=Depends(get_warehouse), user=Depends(auth.current_user), conn=Depends(get_conn)):
     """Inventeringsläget: sätt saldot till det räknade antalet (skillnaden
     bokförs som in/ut-händelse "Inventering") och märk artikeln inventerad."""
-    return services.count_item(conn, item_id, body.counted, body.day, warehouse=wh)
+    return services.count_item(conn, item_id, body.counted, body.day, shelf_location=body.shelf_location, warehouse=wh)
 
 
 @api.post("/items/{item_id}/adjust", response_model=schemas.ScanResponse, tags=["scan"])

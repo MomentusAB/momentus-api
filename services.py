@@ -502,13 +502,14 @@ def mark_inventoried(conn, item_id: int, today: date = None, warehouse=None):
     return get_item(conn, item_id, warehouse)
 
 
-def count_item(conn, item_id: int, counted: int, today: date = None, warehouse=None):
+def count_item(conn, item_id: int, counted: int, today: date = None, shelf_location: str = None, warehouse=None):
     """Inventeringsläget: registrera räknat antal för en artikel.
 
     Skiljer sig det räknade antalet från saldot bokförs skillnaden som en
     in/ut-händelse med noteringen "Inventering" (samma spår som en scan), och
-    artikeln märks sedan som inventerad dagens datum. Allt sker i en
-    transaktion så att saldot och inventeringsdatumet alltid hör ihop."""
+    artikeln märks sedan som inventerad dagens datum. Skickas shelf_location
+    med sätts även hyllplatsen (loggas i historiken som "Hylla"). Allt sker i
+    en transaktion så att saldot och inventeringsdatumet alltid hör ihop."""
     items_t, hist_t, tx_t, cfg = _tables(warehouse)
     if counted < 0:
         raise AppError("Räknat antal kan inte vara negativt.")
@@ -543,20 +544,28 @@ def count_item(conn, item_id: int, counted: int, today: date = None, warehouse=N
                 )
                 tx = dict(cur.fetchone())
 
+            changes = []
+            old_shelf = (locked.get("shelf_location") or "").strip()
+            new_shelf = old_shelf if shelf_location is None else shelf_location.strip()
+            if new_shelf != old_shelf:
+                changes.append((FIELD_LABELS["shelf_location"], old_shelf, new_shelf))
+
             cur.execute(
                 f"""
                 UPDATE {items_t}
-                SET quantity = %s, last_inventory_check = %s, updated_at = CURRENT_TIMESTAMP
+                SET quantity = %s, last_inventory_check = %s, shelf_location = %s,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
                 """,
-                (counted, today, item_id),
+                (counted, today, new_shelf, item_id),
             )
 
         old_value = locked["last_inventory_check"]
         old_str = old_value.strftime("%Y-%m-%d") if old_value else ""
         new_str = today.strftime("%Y-%m-%d")
         if old_str != new_str:
-            db.log_item_changes(conn, item_id, [("Senast inventerad", old_str, new_str)], table=hist_t)
+            changes.append(("Senast inventerad", old_str, new_str))
+        db.log_item_changes(conn, item_id, changes, table=hist_t)
 
     item = get_item(conn, item_id, warehouse)
     if tx:
