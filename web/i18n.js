@@ -228,6 +228,10 @@ const STRINGS = {
   "count.abort": ["Avbryt inventeringen", "Abort count"],
   "count.abort.confirm": ["Avbryta? Allt som redan bockats av är sparat, bara listan nollställs.", "Abort? Everything already ticked is saved; only the list is reset."],
   "count.inProgress": ["Pågående inventering", "Count in progress"],
+  "count.group.shelf": ["Hylla", "Shelf"],
+  "count.group.category": ["Kategori", "Category"],
+  "count.group.none": ["Lista", "List"],
+  "count.group.noShelf": ["Utan hyllplats", "No shelf location"],
 };
 
 const I18N = {

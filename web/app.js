@@ -3,7 +3,7 @@
 
 'use strict';
 
-const APP_VERSION = '2026-10-17';   // visas på inloggningssidan och under Mer
+const APP_VERSION = '2026-10-17b';   // visas på inloggningssidan och under Mer
 
 // ---------------------------------------------------------------- helpers
 
@@ -12,6 +12,8 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const today = () => new Date().toISOString().slice(0, 10);
 const shortDate = (iso) => (iso ? String(iso).slice(0, 16).replace('T', ' ') : '');
+// Sorterar "A2" före "A10" och "B1" efter "A10" - för hyllplatser.
+const naturalCompare = (a, b) => String(a).localeCompare(String(b), 'sv', { numeric: true, sensitivity: 'base' });
 const fmtMoney = (n) => n.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const ICONS = {
@@ -887,6 +889,9 @@ const CountScreen = {
   search: '',
   showDone: false,
   busy: false,
+  // Hur listan grupperas: 'shelf' (hylla för hylla, de utan hylla sist),
+  // 'category' (som Lager-fliken) eller 'none' (en platt lista).
+  group: localStorage.getItem('momentus.count.group') || 'shelf',
 
   key() { return 'momentus.count.' + App.warehouse; },
   session() { try { return JSON.parse(localStorage.getItem(this.key()) || 'null'); } catch { return null; } },
@@ -906,11 +911,18 @@ const CountScreen = {
       <div class="content">
         <div class="card"><div class="count-progress" id="ct-progress"></div></div>
         <div class="search"><input id="ct-search" type="search" placeholder="${esc(t('count.searchPrompt'))}" value="${esc(this.search)}" autocapitalize="none" autocorrect="off"></div>
+        <div class="segmented" id="ct-group">${[['shelf', 'count.group.shelf'], ['category', 'count.group.category'], ['none', 'count.group.none']].map(([v, k]) =>
+          `<button type="button" data-g="${v}" class="${this.group === v ? 'active' : ''}">${esc(t(k))}</button>`).join('')}</div>
         <div id="ct-list"><div class="empty">${esc(t('loading'))}</div></div>
       </div>
       ${tabbar('count')}
     </div>`);
     $('#ct-search').oninput = (e) => { this.search = e.target.value; this.renderList(); };
+    $$('#ct-group button').forEach((b) => b.onclick = () => {
+      this.group = b.dataset.g; localStorage.setItem('momentus.count.group', this.group);
+      $$('#ct-group button').forEach((x) => x.classList.toggle('active', x === b));
+      this.renderList();
+    });
     $('#ct-scan').onclick = () => Scanner.captureOnce((code) => this.scanned(code));
     $('#ct-menu').onclick = () => this.menu();
     this.load();
@@ -990,11 +1002,20 @@ const CountScreen = {
     else if (!rem.length && !q) html += `<div class="empty count-alldone">${esc(t('count.allDone'))}</div>`;
     else if (!rem.length) html += `<div class="empty">${esc(t('inventory.empty'))}</div>`;
     else {
-      // Grupperat per hylla så att man kan gå hylla för hylla.
-      const byShelf = new Map();
-      for (const it of rem) { const k = (it.shelf_location || '').trim() || '–'; if (!byShelf.has(k)) byShelf.set(k, []); byShelf.get(k).push(it); }
-      for (const [shelf, list] of byShelf) {
-        html += `<div class="group-head">${esc(shelf)} <span class="sub">${list.length}</span></div><div class="card">${list.map((i) => this.rowHtml(i, false)).join('')}</div>`;
+      const byName = (a, b) => (a.product_name || '').localeCompare(b.product_name || '', 'sv');
+      const groupHtml = (label, list) => `<div class="group-head">${esc(label)} <span class="sub">${list.length}</span></div><div class="card">${list.map((i) => this.rowHtml(i, false)).join('')}</div>`;
+      if (this.group === 'shelf') {
+        // Hylla för hylla i hyllordning (A2 före A10); de utan hyllplats i en egen grupp sist.
+        const byShelf = new Map(); const noShelf = [];
+        for (const it of rem) { const k = (it.shelf_location || '').trim(); if (!k) noShelf.push(it); else { if (!byShelf.has(k)) byShelf.set(k, []); byShelf.get(k).push(it); } }
+        for (const shelf of Array.from(byShelf.keys()).sort(naturalCompare)) html += groupHtml(shelf, byShelf.get(shelf).sort(byName));
+        if (noShelf.length) html += groupHtml(t('count.group.noShelf'), noShelf.sort(byName));
+      } else if (this.group === 'category') {
+        const byCat = new Map();
+        for (const it of rem) { const k = it.main_label + ' · ' + it.sub_label; if (!byCat.has(k)) byCat.set(k, []); byCat.get(k).push(it); }
+        for (const k of Array.from(byCat.keys()).sort(naturalCompare)) html += groupHtml(k, byCat.get(k).sort(byName));
+      } else {
+        html += `<div class="card">${rem.slice().sort(byName).map((i) => this.rowHtml(i, false)).join('')}</div>`;
       }
     }
     if (doneList.length) {
